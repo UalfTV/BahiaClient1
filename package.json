@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "bahiaclient",
   "version": "0.2.0",
   "description": "BahiaClient — cliente personalizado de HaxBall",
@@ -17,6 +17,9 @@
     "productName": "BahiaClient",
     "asar": true,
     "compression": "maximum",
+    "directories": {
+      "buildResources": "assets"
+    },
     "win": {
       "target": [
         {
@@ -25,7 +28,14 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "publish": [
+        {
+          "provider": "github",
+          "owner": "UalfTV",
+          "repo": "BahiaClient1"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
