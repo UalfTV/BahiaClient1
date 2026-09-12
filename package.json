@@ -17,9 +17,6 @@
     "productName": "BahiaClient",
     "asar": true,
     "compression": "maximum",
-    "directories": {
-      "buildResources": "assets"
-    },
     "win": {
       "target": [
         {
@@ -48,6 +45,7 @@
       "target": ["dmg"],
       "category": "public.app-category.games",
       "icon": "assets/icon.icns",
+      "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false
     },
