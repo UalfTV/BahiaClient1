@@ -1,0 +1,75 @@
+{
+  "name": "bahiaclient",
+  "version": "0.2.0",
+  "description": "BahiaClient — cliente personalizado de HaxBall",
+  "main": "main.js",
+  "author": "Joaco",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder --win --x64 --mac --linux"
+  },
+  "build": {
+    "appId": "com.bahiaclient.app",
+    "productName": "BahiaClient",
+    "asar": true,
+    "compression": "maximum",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "signAndEditExecutable": false,
+      "publish": [
+        {
+          "provider": "github",
+          "owner": "UalfTV",
+          "repo": "bahiaclient1"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerHeaderIcon": "assets/icon.ico",
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.games",
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Game",
+      "icon": "assets/icon.png"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "discord-rpc.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "!**/*.map",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme.txt}"
+    ]
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "electron-log": "^5.1.4",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^32.3.3",
+    "electron-builder": "^24.13.3"
+  }
+}
