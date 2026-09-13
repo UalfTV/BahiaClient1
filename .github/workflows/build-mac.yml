@@ -1,16 +1,17 @@
-﻿name: Build Mac
+﻿name: Build macOS
 
 on:
-  workflow_dispatch:
   push:
     tags:
-      - 'v*'
+      - 'v*-mac'
+  workflow_dispatch:
 
 jobs:
   build-mac:
     runs-on: macos-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    strategy:
+      matrix:
+        arch: [x64, arm64]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,19 +20,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
-      - name: Build Mac
-        run: npx electron-builder --mac --publish never
+      - name: Build DMG (${{ matrix.arch }})
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish never
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      - name: Upload DMG
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: BahiaClient-mac
-          path: dist/*.dmg
+          name: mac-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.dmg.blockmap
+            dist/latest-mac.yml
           if-no-files-found: error
