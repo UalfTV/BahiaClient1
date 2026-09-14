@@ -1,6 +1,6 @@
 {
   "name": "bahiaclient",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "description": "BahiaClient — cliente personalizado de HaxBall",
   "main": "main.js",
   "author": "Joaco",
@@ -10,13 +10,26 @@
     "build": "electron-builder --win --x64",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux",
-    "build:all": "electron-builder --win --x64 --mac --linux"
+    "build:all": "electron-builder --win --x64 --mac --linux",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "rebuild": "npm run clean && npm run build"
   },
   "build": {
     "appId": "com.bahiaclient.app",
     "productName": "BahiaClient",
+    "copyright": "Copyright © 2026 Joaco",
     "asar": true,
     "compression": "maximum",
+    "forceCodeSigning": false,
+    "asarUnpack": [
+      "node_modules/**/*.node",
+      "node_modules/**/build/Release/**",
+      "node_modules/**/prebuilds/**"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
     "win": {
       "target": [
         {
@@ -25,12 +38,15 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "signAndEditExecutable": false,
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "publisherName": "Joaco",
+      "legalTrademarks": "BahiaClient",
+      "requestedExecutionLevel": "asInvoker",
       "publish": [
         {
           "provider": "github",
           "owner": "UalfTV",
-          "repo": "BahiaClient1"
+          "repo": "BahiaClient"
         }
       ]
     },
@@ -38,21 +54,69 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerHeaderIcon": "assets/icon.ico",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
       "perMachine": false,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BahiaClient",
+      "runAfterFinish": true,
+      "artifactName": "${productName}-${version}-Setup.${ext}"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
+      ],
       "category": "public.app-category.games",
       "icon": "assets/icon.icns",
       "identity": null,
       "hardenedRuntime": false,
-      "gatekeeperAssess": false
+      "gatekeeperAssess": false,
+      "darkModeSupport": true,
+      "minimumSystemVersion": "11.0",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "BahiaClient usa el micrófono para el chat de voz.",
+        "NSCameraUsageDescription": "BahiaClient no usa la cámara.",
+        "LSApplicationCategoryType": "public.app-category.games"
+      },
+      "publish": [
+        {
+          "provider": "github",
+          "owner": "UalfTV",
+          "repo": "BahiaClient"
+        }
+      ]
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "assets/icon.icns",
+      "backgroundColor": "#0a0714",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        { "x": 140, "y": 200, "type": "file" },
+        { "x": 400, "y": 200, "type": "link", "path": "/Applications" }
+      ]
     },
     "linux": {
       "target": ["AppImage"],
       "category": "Game",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "artifactName": "${productName}-${version}.${ext}",
+      "publish": [
+        {
+          "provider": "github",
+          "owner": "UalfTV",
+          "repo": "BahiaClient"
+        }
+      ]
     },
     "files": [
       "main.js",
@@ -61,7 +125,17 @@
       "renderer/**/*",
       "assets/**/*",
       "!**/*.map",
-      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme.txt}"
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme.txt}",
+      "!**/node_modules/**/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/**/*.d.ts",
+      "!**/node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
     ]
   },
   "dependencies": {

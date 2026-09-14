@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net;
+  font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net;
+  img-src 'self' data: blob:;
+  media-src 'self' blob:;
+  connect-src 'self' blob: wss://node-haxball.onrender.com https://node-haxball.onrender.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://haxball-server.tail5db60d.ts.net;
+  worker-src 'self' blob:;
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none';
+">
+<title>BahiaClient</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu:wght@300;400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" crossorigin="anonymous">
+<link rel="stylesheet" href="theme.css" />
+<style>
+/* ============================================================
+   VOICE — CSS embebido para garantizar que la UI se vea bien
+   aunque theme.css no tenga los estilos.
+   ============================================================ */
+.voice-widget{position:relative;flex-shrink:0}
+.voice-btn{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);color:#b0b0c0;border-radius:11px;padding:8px 14px;font-size:12px;font-weight:700;transition:all .22s cubic-bezier(.22,.85,.32,1.15);letter-spacing:.1px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.voice-btn:hover{border-color:rgba(192,132,252,.35);color:#c084fc;background:rgba(168,85,247,.07);transform:translateY(-1px)}
+.voice-btn.live{background:linear-gradient(135deg,rgba(168,85,247,.16),rgba(168,85,247,.06));border-color:rgba(168,85,247,.38);color:#6ee7b7;box-shadow:0 0 0 1px rgba(168,85,247,.1),0 4px 18px rgba(168,85,247,.15)}
+.voice-btn.mute{background:linear-gradient(135deg,rgba(244,63,94,.16),rgba(244,63,94,.06));border-color:rgba(244,63,94,.38);color:#fca5b5}
+.voice-btn i{font-size:14px}
+.voice-count{background:rgba(255,255,255,.14);border-radius:10px;padding:1px 8px;font-size:10px;font-weight:800;letter-spacing:.2px}
+.voice-btn.live .voice-count{background:rgba(168,85,247,.35);color:#ecfdf5}
+
+.voice-panel{
+  position:fixed;
+  width:290px;
+  background:linear-gradient(175deg,rgba(20,20,32,.99),rgba(14,14,22,.99));
+  backdrop-filter:blur(24px);
+  -webkit-backdrop-filter:blur(24px);
+  border:1px solid rgba(192,132,252,.28);
+  border-radius:16px;
+  padding:16px;
+  box-shadow:0 8px 32px rgba(0,0,0,.5),0 24px 80px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.05);
+  z-index:99999;
+  display:none;
+  color:#f5f3ff;
+  font-family:'Ubuntu','Inter',system-ui,sans-serif;
+}
+.voice-panel.on{display:block;animation:voiceFade .2s cubic-bezier(.16,1,.3,1)}
+@keyframes voiceFade{from{opacity:0}to{opacity:1}}
+.voice-panel h4{font-size:13px;font-weight:700;color:#e8e8f2;margin:0 0 11px 0;display:flex;align-items:center;gap:8px;letter-spacing:-.1px}
+.voice-panel h4 i{color:#c084fc;font-size:16px}
+.voice-peers{max-height:200px;overflow-y:auto;margin-bottom:13px}
+.voice-peer{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;font-size:12.5px;color:#c0c0d0;margin-bottom:3px;transition:background .18s}
+.voice-peer:hover{background:rgba(255,255,255,.03)}
+.voice-peer .vdot{width:8px;height:8px;border-radius:50%;background:#a855f7;box-shadow:0 0 8px rgba(168,85,247,.75);flex-shrink:0}
+.voice-peer.muted .vdot{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.65)}
+.voice-peer .vname{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
+.voice-peer.self .vname{color:#c084fc;font-weight:700}
+.voice-actions{display:flex;gap:8px}
+.voice-actions button{flex:1;padding:8px 10px;font-size:12px;border-radius:11px;font-weight:650;cursor:pointer;transition:all .2s;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.voice-actions button.fb{background:rgba(255,255,255,.03);border:1px solid rgba(168,85,247,.15);color:#c4b5d9}
+.voice-actions button.fb.p{background:linear-gradient(135deg,#7c3aed,#a855f7);border:none;color:#fff;box-shadow:0 4px 16px rgba(124,58,237,.35)}
+.voice-actions button.fb.p:hover{box-shadow:0 6px 24px rgba(168,85,247,.45);transform:translateY(-1px)}
+.voice-actions button.fb.danger{color:#fb7185}
+.voice-actions button.fb.danger:hover{background:rgba(244,63,94,.12);border-color:rgba(244,63,94,.35);color:#e2543a}
+.voice-hint{font-size:11px;color:#8b7fa3;line-height:1.55;margin-top:8px}
+.voice-devices{display:flex;flex-direction:column;gap:8px;padding:10px 0 12px;margin-bottom:12px;border-bottom:1px solid rgba(168,85,247,.1)}
+.voice-device{display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.025);border:1px solid rgba(168,85,247,.1);border-radius:9px;padding:8px 11px;transition:all .2s}
+.voice-device:hover{border-color:rgba(192,132,252,.28);background:rgba(124,58,237,.04)}
+.voice-device i{font-size:14px;color:#c084fc;flex-shrink:0}
+.voice-device select{flex:1;min-width:0;background:transparent;border:none;color:#c4b5d9;font-size:11.5px;outline:none;cursor:pointer;appearance:none;-webkit-appearance:none;padding-right:16px;font-family:inherit;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235a5a70' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right center;background-size:12px}
+.voice-device select option{background:#1a1628;color:#f5f3ff}
+
+.voice-strip{display:flex;align-items:center;gap:11px;padding:8px 14px;background:rgba(7,7,14,.9);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(168,85,247,.1);flex-shrink:0;font-size:12px;color:#c084fc;font-weight:600;position:fixed;top:64px;left:50%;transform:translateX(-50%);border-radius:12px;border:1px solid rgba(168,85,247,.15);z-index:9998}
+.voice-strip>i{color:#6ee7b7;font-size:15px}
+.voice-strip .voices-list{flex:1;display:flex;gap:6px;overflow-x:auto;white-space:nowrap;max-width:400px}
+.voice-strip .voices-list::-webkit-scrollbar{display:none}
+.voice-strip .vp{background:linear-gradient(135deg,rgba(168,85,247,.12),rgba(168,85,247,.06));border:1px solid rgba(168,85,247,.28);color:#6ee7b7;padding:3px 11px;border-radius:20px;font-size:11px;display:inline-flex;align-items:center;gap:5px;font-weight:600}
+.voice-strip .vp.muted{background:linear-gradient(135deg,rgba(245,158,11,.12),rgba(245,158,11,.06));border-color:rgba(245,158,11,.32);color:#fde047}
+.voice-strip .voice-btn{font-size:11px;padding:5px 12px}
+
+/* ============================================================
+   PARTY MINI PANEL (arriba a la izquierda, solo lectura)
+   ============================================================ */
+#bc-party-mini{
+  position:fixed;
+  top:64px;
+  left:12px;
+  width:220px;
+  background:linear-gradient(175deg,rgba(20,20,32,.96),rgba(14,14,22,.96));
+  border:1px solid rgba(192,132,252,.24);
+  border-radius:14px;
+  padding:10px 12px;
+  z-index:9999;
+  color:#f5f3ff;
+  font-family:'Ubuntu','Inter',system-ui,sans-serif;
+  font-size:12px;
+  box-shadow:0 6px 24px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.04);
+}
+.party-mini-head{display:flex;align-items:center;gap:7px;font-weight:800;font-size:12.5px;color:#c084fc;letter-spacing:-.1px;margin-bottom:8px}
+.party-mini-head i{font-size:14px}
+.party-mini-count{margin-left:auto;background:rgba(168,85,247,.18);color:#e9d5ff;padding:1px 8px;border-radius:10px;font-size:10.5px;font-weight:800}
+.party-mini-members{display:flex;flex-direction:column;gap:3px;margin-bottom:6px}
+.party-mini-member{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:8px;font-weight:500}
+.party-mini-member .pmm-dot{width:7px;height:7px;border-radius:50%;background:#6b7280;flex-shrink:0}
+.party-mini-member.online .pmm-dot{background:#a855f7;box-shadow:0 0 6px rgba(168,85,247,.7)}
+.party-mini-member.offline{opacity:.55}
+.party-mini-member.self{color:#c084fc;font-weight:700}
+.party-mini-member .pmm-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.party-mini-member .pmm-crown{color:#fde047;font-size:11px}
+.party-mini-room{margin-top:8px;padding-top:8px;border-top:1px solid rgba(168,85,247,.14);display:flex;flex-direction:column;gap:6px}
+.party-mini-room b{color:#c084fc}
+#bc-party-mini .voice-btn{font-size:11.5px;padding:6px 12px;justify-content:center;width:100%}
+</style>
+</head>
+<body>
+
+<div id="game-container">
+  <canvas id="game-canvas" tabindex="-1"></canvas>
+</div>
+
+<!-- PARTY MINI PANEL (solo lectura) -->
+<div id="bc-party-mini" style="display:none">
+  <div class="party-mini-head">
+    <i class="ti ti-users-group"></i>
+    <span>Party</span>
+    <span class="party-mini-count" id="bc-party-mini-count">0/5</span>
+  </div>
+  <div class="party-mini-members" id="bc-party-mini-members"></div>
+  <div class="party-mini-room" id="bc-party-mini-room" style="display:none">
+    <div>Sala actual: <b id="bc-party-mini-room-name">—</b></div>
+    <button class="voice-btn" onclick="bcPartyJoinLeaderRoom()">
+      <i class="ti ti-door-enter"></i> Unirme
+    </button>
+  </div>
+</div>
+
+<div class="chatbox-view"></div>
+
+<!-- Fondo animado (visible cuando no hay partido) -->
+<div id="bc-nogame-bg">
+  <div class="bc-nogame-blob bc-nogame-blob-1"></div>
+  <div class="bc-nogame-blob bc-nogame-blob-2"></div>
+  <div class="bc-nogame-blob bc-nogame-blob-3"></div>
+  <div class="bc-nogame-grid"></div>
+</div>
+
+<!-- SCOREBOARD -->
+<div id="bc-scoreboard">
+  <span class="team red">
+    <span class="dot"></span>
+    <span class="score" id="bc-score-red">0</span>
+  </span>
+  <span class="time" id="bc-time">00:00</span>
+  <span class="team blue">
+    <span class="score" id="bc-score-blue">0</span>
+    <span class="dot"></span>
+  </span>
+</div>
+
+<!-- VOICE STRIP -->
+<div class="voice-strip" id="voice-strip" style="display:none">
+  <i class="ti ti-microphone"></i>
+  <span style="font-weight:700">Voz:</span>
+  <div class="voices-list" id="voices-list"></div>
+  <button class="voice-btn" id="voice-mute-btn" onclick="voiceToggleMute()">
+    <i class="ti ti-microphone" id="voice-mute-icon"></i>
+    <span id="voice-mute-text">Mutear</span>
+  </button>
+  <button class="voice-btn mute" onclick="voiceLeave()">
+    <i class="ti ti-phone-off"></i>
+    <span>Salir</span>
+  </button>
+</div>
+
+<!-- TOP RIGHT -->
+<div id="bc-topright">
+  <button class="bc-topbtn bc-topbtn--icon" id="bc-btn-sound" title="Sonido">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+  </button>
+  <button class="bc-topbtn bc-topbtn--icon" id="bc-btn-menu" title="Menú">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+  </button>
+  <button class="bc-topbtn bc-topbtn--icon" id="bc-btn-settings" title="Ajustes">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+  </button>
+  <div class="voice-widget" id="voice-widget">
+    <button class="voice-btn" id="voice-btn" onclick="toggleVoicePanel()">
+      <i class="ti ti-microphone" id="voice-btn-icon"></i>
+      <span id="voice-btn-label">Voz</span>
+      <span class="voice-count" id="voice-btn-count" style="display:none">0</span>
+    </button>
+    <div class="voice-panel" id="voice-panel">
+      <h4><i class="ti ti-microphone"></i> Chat de voz</h4>
+      <div class="voice-devices" id="voice-devices">
+        <div class="voice-device">
+          <i class="ti ti-microphone"></i>
+          <select id="voice-mic-select" onchange="onMicChange(this.value)"></select>
+        </div>
+        <div class="voice-device">
+          <i class="ti ti-headphones"></i>
+          <select id="voice-spk-select" onchange="onSpeakerChange(this.value)"></select>
+        </div>
+      </div>
+      <div id="voice-panel-body"></div>
+    </div>
+  </div>
+</div>
+
+<!-- OVERLAY FPS/PING (abajo a la derecha, solo en partida) -->
+<div id="bc-perf-overlay" class="bc-perf-overlay" style="display:none">
+  <div class="bc-perf-item" id="bc-perf-fps-wrap">
+    <i class="ti ti-activity"></i>
+    <span class="bc-perf-val" id="bc-perf-fps">–</span>
+    <span class="bc-perf-lbl">FPS</span>
+  </div>
+  <div class="bc-perf-sep"></div>
+  <div class="bc-perf-item" id="bc-perf-ping-wrap">
+    <i class="ti ti-wifi"></i>
+    <span class="bc-perf-val" id="bc-perf-ping">–</span>
+    <span class="bc-perf-lbl">ms</span>
+  </div>
+</div>
+
+<!-- SETTINGS PANEL -->
+<div id="bc-settings-panel">
+  <div class="bc-set-tabs">
+    <button class="bc-set-tab on" data-set-tab="game" onclick="bcSetTab('game')"><i class="ti ti-device-gamepad-2"></i> Juego</button>
+    <button class="bc-set-tab" data-set-tab="custom" onclick="bcSetTab('custom')"><i class="ti ti-palette"></i> Personalización</button>
+  </div>
+
+  <!-- Tab: Juego -->
+  <div class="bc-set-pane" id="bc-set-pane-game">
+    <div class="bc-settings-row">
+      <label>Volumen</label>
+      <input type="range" id="bc-set-volume" min="0" max="100" value="35">
+      <span class="bc-set-val" id="bc-set-volume-val">35%</span>
+    </div>
+
+    <div class="bc-settings-row">
+      <label>Zoom</label>
+      <input type="range" id="bc-set-zoom" min="50" max="200" value="100">
+      <span class="bc-set-val" id="bc-set-zoom-val">1.0x</span>
+    </div>
+
+    <div class="bc-settings-row">
+      <label>Calidad</label>
+      <input type="range" id="bc-set-quality" min="25" max="100" value="100">
+      <span class="bc-set-val" id="bc-set-quality-val">100%</span>
+    </div>
+
+    <div class="bc-settings-divider"></div>
+
+    <div class="bc-settings-row bc-settings-toggle">
+      <label>Mostrar FPS y ping</label>
+      <label class="bc-switch">
+        <input type="checkbox" id="bc-set-showfps">
+        <span class="bc-switch-slider"></span>
+      </label>
+    </div>
+
+    <div class="bc-settings-divider"></div>
+
+    <button class="bc-btn bc-btn--ghost bc-btn--block" id="bc-set-reset-chat">Centrar chat</button>
+    <button class="bc-btn bc-btn--danger bc-btn--block" id="bc-set-reset-all">Resetear todo</button>
+  </div>
+
+  <!-- Tab: Personalización -->
+  <div class="bc-set-pane" id="bc-set-pane-custom" style="display:none">
+    <div class="bc-custom-intro">Customizá la apariencia del juego.</div>
+    <div class="bc-custom-grid">
+      <button class="bc-custom-card" data-cat="ball">
+        <div class="bc-custom-icon" style="background:radial-gradient(circle at 35% 35%, #fef3c7, #fb923c 40%, #7c2d12 100%)"><i class="ti ti-ball-football"></i></div>
+        <div class="bc-custom-txt">
+          <div class="bc-custom-name">Pelota</div>
+          <div class="bc-custom-sub">Estilo, tamaño</div>
+        </div>
+      </button>
+      <button class="bc-custom-card" data-cat="trail">
+        <div class="bc-custom-icon" style="background:linear-gradient(135deg, #7dd3fc, #a855f7)"><i class="ti ti-line"></i></div>
+        <div class="bc-custom-txt">
+          <div class="bc-custom-name">Trail</div>
+          <div class="bc-custom-sub">Estela</div>
+        </div>
+      </button>
+      <button class="bc-custom-card" data-cat="bg">
+        <div class="bc-custom-icon" style="background:linear-gradient(180deg, #22d3ee, #0369a1, #082f49)"><i class="ti ti-photo"></i></div>
+        <div class="bc-custom-txt">
+          <div class="bc-custom-name">Fondo</div>
+          <div class="bc-custom-sub">Del mapa</div>
+        </div>
+      </button>
+      <button class="bc-custom-card" data-cat="ambient">
+        <div class="bc-custom-icon" style="background:radial-gradient(circle at 30% 40%, #7c3aed, transparent 70%), #05000f"><i class="ti ti-sparkles"></i></div>
+        <div class="bc-custom-txt">
+          <div class="bc-custom-name">Ambiente</div>
+          <div class="bc-custom-sub">Efectos</div>
+        </div>
+      </button>
+      <button class="bc-custom-card" data-cat="avatar">
+        <div class="bc-custom-icon" style="background:linear-gradient(135deg, #10b981, #059669)"><i class="ti ti-user-circle"></i></div>
+        <div class="bc-custom-txt">
+          <div class="bc-custom-name">Avatar</div>
+          <div class="bc-custom-sub">Tu foto</div>
+        </div>
+      </button>
+      <button class="bc-custom-card" data-cat="sounds">
+        <div class="bc-custom-icon" style="background:linear-gradient(135deg, #ec4899, #7c3aed)"><i class="ti ti-volume"></i></div>
+        <div class="bc-custom-txt">
+          <div class="bc-custom-name">Sonidos</div>
+          <div class="bc-custom-sub">Kick / gol</div>
+        </div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- CHAT -->
+<div id="bc-chat-wrap">
+  <div id="bc-chat-drag" title="Arrastrar para mover">
+    <button id="bc-chat-hide" type="button" title="Ocultar chat">—</button>
+    <button id="bc-chat-reset" type="button" title="Centrar chat">↺</button>
+  </div>
+  <div id="bc-chat"></div>
+  <form id="bc-chat-form" onsubmit="return false">
+    <input id="bc-chat-text" type="text" maxlength="140" placeholder="Escribí un mensaje…" autocomplete="off" spellcheck="false">
+  </form>
+
+  <div class="bc-resize-handle bc-resize-n"  data-dir="n"></div>
+  <div class="bc-resize-handle bc-resize-s"  data-dir="s"></div>
+  <div class="bc-resize-handle bc-resize-e"  data-dir="e"></div>
+  <div class="bc-resize-handle bc-resize-w"  data-dir="w"></div>
+  <div class="bc-resize-handle bc-resize-nw" data-dir="nw"></div>
+  <div class="bc-resize-handle bc-resize-ne" data-dir="ne"></div>
+  <div class="bc-resize-handle bc-resize-sw" data-dir="sw"></div>
+  <div class="bc-resize-handle bc-resize-se" data-dir="se"></div>
+</div>
+
+<!-- MODAL MENU -->
+<div id="bc-menu-modal">
+  <div class="bc-modal-backdrop" id="bc-modal-backdrop"></div>
+  <div class="bc-modal-content">
+
+    <div class="bc-modal-head">
+      <div class="bc-modal-title" id="bc-modal-title">Sala</div>
+      <div class="bc-modal-actions">
+        <button class="bc-btn bc-btn--ghost" id="bc-modal-rec" title="Grabar">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><circle cx="12" cy="12" r="6"></circle></svg>
+          <span>Rec</span>
+        </button>
+        <button class="bc-btn bc-btn--ghost" id="bc-modal-link" title="Copiar link">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+          <span>Link</span>
+        </button>
+        <button class="bc-btn bc-btn--danger" id="bc-modal-leave" title="Salir">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+          <span>Leave</span>
+        </button>
+        <button class="bc-modal-close" id="bc-modal-close" type="button" title="Cerrar (Esc)">✕</button>
+      </div>
+    </div>
+
+    <div class="bc-modal-admin" id="bc-modal-admin" style="display:none">
+      <button class="bc-admin-btn bc-admin-primary" id="bc-btn-start">▶ Start</button>
+      <button class="bc-admin-btn" id="bc-btn-pause">⏸ Pause</button>
+      <button class="bc-admin-btn bc-admin-danger" id="bc-btn-stop">⏹ Stop</button>
+      <div class="bc-admin-divider"></div>
+      <button class="bc-admin-btn" id="bc-btn-pickstadium">🗺 Change Map</button>
+      <div class="bc-admin-divider"></div>
+      <button class="bc-admin-btn" id="bc-btn-autoteams">Auto Teams</button>
+      <button class="bc-admin-btn" id="bc-btn-lockteams">Lock Teams</button>
+      <button class="bc-admin-btn" id="bc-btn-reset">Reset</button>
+    </div>
+
+    <div class="bc-modal-teams" id="bc-modal-teams">
+      <div class="bc-team-col" data-team="red">
+        <div class="bc-team-head red">Red</div>
+        <div class="bc-team-list" id="bc-list-red"></div>
+      </div>
+      <div class="bc-team-col" data-team="spec">
+        <div class="bc-team-head spec">Spectators</div>
+        <div class="bc-team-list" id="bc-list-spec"></div>
+      </div>
+      <div class="bc-team-col" data-team="blue">
+        <div class="bc-team-head blue">Blue</div>
+        <div class="bc-team-list" id="bc-list-blue"></div>
+      </div>
+    </div>
+
+    <div class="bc-modal-info">
+      <div class="bc-info-row">
+        <span class="bc-info-label">Time limit</span>
+        <span class="bc-info-value" id="bc-info-timelimit">-</span>
+      </div>
+      <div class="bc-info-row">
+        <span class="bc-info-label">Score limit</span>
+        <span class="bc-info-value" id="bc-info-scorelimit">-</span>
+      </div>
+      <div class="bc-info-row">
+        <span class="bc-info-label">Stadium</span>
+        <span class="bc-info-value bc-accent" id="bc-info-stadium">-</span>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- CONTEXT MENU -->
+<div class="bc-ctx-menu" id="bc-ctx-menu">
+  <div class="bc-ctx-head" id="bc-ctx-name">Jugador</div>
+  <div class="bc-ctx-sep"></div>
+  <div class="bc-ctx-item" data-action="red">→ Mover a Red</div>
+  <div class="bc-ctx-item" data-action="blue">→ Mover a Blue</div>
+  <div class="bc-ctx-item" data-action="spec">→ Mover a Spectator</div>
+  <div class="bc-ctx-sep"></div>
+  <div class="bc-ctx-item" data-action="admin">⭐ Dar/Quitar admin</div>
+  <div class="bc-ctx-sep"></div>
+  <div class="bc-ctx-item bc-ctx-danger" data-action="kick">🚪 Kick</div>
+  <div class="bc-ctx-item bc-ctx-danger" data-action="ban">🔨 Ban</div>
+  <div class="bc-ctx-item bc-ctx-danger" data-action="banip">🔨 Ban IP</div>
+</div>
+
+<!-- STATUS -->
+<div id="bc-status">
+  <div class="spinner"></div>
+  <div class="title" id="bc-status-title">Conectando…</div>
+  <div class="desc" id="bc-status-desc"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/json5/2.2.3/index.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/gh/wxyz-abcd/node-haxball@latest/src/api.js" crossorigin="anonymous"></script>
+<script src="reskin-presets.js"></script>
+<script src="renderer.js"></script>
+<script src="game.js"></script>
+<script src="voice.js"></script>
+<script src="customizer.js"></script>
+<script src="stats-reporter.js?v=2"></script>
+<script src="reskin-ui.js"></script>
+
+<script>
+// ============================================================
+// CHAT RESET — handler para el botón ↺ del drag handle
+// FIX: bc-chat-reset no tenía listener; el click no hacía nada.
+// ============================================================
+(function(){
+  'use strict';
+  var btn = document.getElementById('bc-chat-reset');
+  if (!btn) return;
+  btn.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    ev.preventDefault();
+    try { localStorage.removeItem('bc_chat_rect_v1'); } catch(e){}
+    try { localStorage.removeItem('bc_chat_hidden'); } catch(e){}
+    var wrap = document.getElementById('bc-chat-wrap');
+    if (!wrap) return;
+    wrap.style.left = '';
+    wrap.style.top = '';
+    wrap.style.width = '';
+    wrap.style.height = '';
+    wrap.style.bottom = '16px';
+    wrap.style.transform = 'translateX(-50%)';
+    wrap.classList.remove('hidden-by-user');
+    if (window.__bcPushChat) window.__bcPushChat(null, 'Chat recentrado', null, 'system');
+  });
+})();
+
+// ============================================================
+// PARTY MINI PANEL — recibe updates del launcher
+// ============================================================
+
+(function () {
+  'use strict';
+
+  window.__bcPartyState = null;
+
+  function bcPartyEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  window.__bcPartyUpdate = function (party) {
+    window.__bcPartyState = party;
+    var el = document.getElementById('bc-party-mini');
+    if (!el) return;
+    if (!party) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+
+    var countEl = document.getElementById('bc-party-mini-count');
+    if (countEl) countEl.textContent = (party.memberCount || 0) + '/' + (party.maxSize || 0);
+
+    var membersEl = document.getElementById('bc-party-mini-members');
+    if (membersEl) {
+      membersEl.innerHTML = (party.members || []).map(function (m) {
+        var cls = 'party-mini-member' +
+          (m.online ? ' online' : ' offline') +
+          (m.playerId === window.__bcPlayerId ? ' self' : '');
+        var crown = m.isLeader ? '<span class="pmm-crown"><i class="ti ti-crown"></i></span>' : '';
+        return '<div class="' + cls + '">' +
+          '<span class="pmm-dot"></span>' + crown +
+          '<span class="pmm-name">' + bcPartyEsc(m.nickname || m.playerId) + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    var roomEl = document.getElementById('bc-party-mini-room');
+    var roomNameEl = document.getElementById('bc-party-mini-room-name');
+    if (roomEl && roomNameEl) {
+      if (party.roomId && party.leaderId !== window.__bcPlayerId) {
+        roomEl.style.display = '';
+        roomNameEl.textContent = party.roomName || party.roomId;
+      } else {
+        roomEl.style.display = 'none';
+      }
+    }
+  };
+
+  window.bcPartyJoinLeaderRoom = function () {
+    var p = window.__bcPartyState;
+    if (!p || !p.roomId) return;
+    try {
+      if (window.bcIPC && window.bcIPC.notifyHost) {
+        window.bcIPC.notifyHost('bc-join-room', { roomId: p.roomId, roomName: p.roomName });
+      }
+    } catch (e) {}
+  };
+
+  // Listener del launcher (usa el preload-game.js con onHostMessage)
+  if (window.bcIPC && window.bcIPC.onHostMessage) {
+    window.bcIPC.onHostMessage('party-update', function (party) {
+      try { window.__bcPartyUpdate && window.__bcPartyUpdate(party); } catch (e) {}
+    });
+    window.bcIPC.onHostMessage('perf-overlay', function (enabled) {
+      try {
+        localStorage.setItem('bc_perf_overlay', enabled ? '1' : '0');
+        if (typeof updatePerfDisplay === 'function') updatePerfDisplay();
+      } catch(e){}
+    });
+  }
+
+  console.log('[party-mini] cargado en el game view');
+})();
+</script>
+
+</body>
+</html>
