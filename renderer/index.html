@@ -236,8 +236,52 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
 .game-error.on{display:block}
 .webview-wrap{position:relative;flex:1;display:flex;min-height:0}
 .webview-wrap webview{flex:1;width:100%;border:none}
-.connecting-overlay{position:absolute;inset:0;background:var(--bg);z-index:20;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;color:var(--text-2);font-size:13.5px;font-weight:600}
-.connecting-overlay .ball{font-size:40px;background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ballSpin 1.2s linear infinite,ballBounce 1.2s ease-in-out infinite}
+.connecting-overlay{
+  position:absolute;inset:0;z-index:20;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  background:
+    radial-gradient(1000px 700px at 50% 120%,rgba(168,85,247,.14),transparent 60%),
+    radial-gradient(800px 500px at 15% -10%,rgba(124,58,237,.12),transparent 55%),
+    var(--bg);
+  background-size:200% 200%;
+  animation:bc-boot-bg 10s ease-in-out infinite;
+  color:var(--text-2);font-size:13.5px;font-weight:600;
+  opacity:1;transition:opacity .3s var(--ease-out);
+}
+.connecting-overlay .ball{font-size:34px;background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ballSpin 1.2s linear infinite,ballBounce 1.2s ease-in-out infinite}
+.connecting-overlay .co-steps{display:flex;gap:6px}
+.connecting-overlay .co-steps span{width:22px;height:3px;border-radius:2px;background:rgba(255,255,255,.12);transition:background .3s ease,box-shadow .3s ease}
+.connecting-overlay .co-steps span.done{background:var(--accent-2);box-shadow:0 0 8px rgba(168,85,247,.55)}
+
+.bc-boot{
+  position:fixed;inset:0;z-index:99999;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+  background:
+    radial-gradient(1200px 800px at 50% 120%,rgba(168,85,247,.16),transparent 60%),
+    radial-gradient(900px 600px at 15% -10%,rgba(124,58,237,.14),transparent 55%),
+    var(--bg);
+  background-size:200% 200%;
+  animation:bc-boot-bg 10s ease-in-out infinite;
+  transition:opacity .4s var(--ease-out);
+}
+.bc-boot.hidden{opacity:0;pointer-events:none}
+@keyframes bc-boot-bg{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+.bc-boot-logo{
+  font-family:'Ubuntu','Inter',system-ui,sans-serif;
+  font-size:30px;font-weight:800;letter-spacing:-.5px;
+  background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  animation:bc-boot-fade .4s var(--ease-out);
+}
+.bc-boot-logo b{font-weight:800}
+.bc-boot-spinner{
+  width:46px;height:46px;position:relative;
+}
+.bc-boot-spinner::before,.bc-boot-spinner::after{content:'';position:absolute;inset:0;border-radius:50%;border:3px solid transparent}
+.bc-boot-spinner::before{border-top-color:var(--accent-2);border-right-color:var(--accent-2);animation:bc-spin .9s cubic-bezier(.6,.1,.4,.9) infinite}
+.bc-boot-spinner::after{border-bottom-color:rgba(255,255,255,.15);animation:bc-spin 1.6s linear infinite reverse}
+@keyframes bc-spin{to{transform:rotate(360deg)}}
+.bc-boot-status{color:var(--text-3);font-size:13px;font-weight:600;animation:bc-boot-fade .3s var(--ease-out)}
+@keyframes bc-boot-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 @keyframes ballSpin{to{transform:rotate(360deg)}}
 @keyframes ballBounce{0%,100%{margin-top:0}50%{margin-top:-10px}}
 .game-perf{position:absolute;bottom:16px;right:16px;display:flex;align-items:center;gap:10px;padding:8px 14px;background:rgba(6,9,15,.82);border:1px solid rgba(255,255,255,.07);border-radius:12px;backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);box-shadow:0 6px 24px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.04);z-index:10;font-family:'Ubuntu','Geist','Inter',system-ui,sans-serif;font-size:12px;font-weight:600;color:#a8b0bc;pointer-events:none;user-select:none}
@@ -585,6 +629,11 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
 </style>
 </head>
 <body>
+<div class="bc-boot" id="bc-boot">
+  <div class="bc-boot-logo">Bahia<b>Client</b></div>
+  <div class="bc-boot-spinner"></div>
+  <div class="bc-boot-status" id="bc-boot-status">Iniciando…</div>
+</div>
 <div class="app">
   <div class="ambient"></div>
   <div class="ambient2"></div>
@@ -825,7 +874,10 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
       <webview id="game-webview" allowpopups partition="persist:haxball-game"></webview>
       <div class="connecting-overlay" id="connecting-overlay" style="display:none">
         <i class="ti ti-ball-football ball"></i>
-        <div>Conectando a la sala…</div>
+        <div id="connecting-overlay-text">Conectando a la sala…</div>
+        <div class="co-steps" id="connecting-overlay-steps">
+          <span></span><span></span><span></span>
+        </div>
       </div>
     </div>
     <div class="game-perf" id="game-perf" style="display:none">
@@ -1826,6 +1878,7 @@ async function startAppAfterBeta(){
   refreshClansHint();
   renderFriends();
   renderClans();
+  setBootStatus('Buscando salas…');
   loadRooms();
   await loadDiscordSession();
   await loadSpotifySession();
@@ -4100,8 +4153,27 @@ async function loadRooms(){
   } finally {
     if(btn) btn.classList.remove('spin');
     isLoading = false;
+    hideBootSplash();
   }
 }
+
+let _bootHidden = false;
+function hideBootSplash(){
+  if (_bootHidden) return;
+  _bootHidden = true;
+  const el = $('bc-boot');
+  if (!el) return;
+  el.classList.add('hidden');
+  setTimeout(() => { if (el.parentElement) el.remove(); }, 450);
+}
+function setBootStatus(text){
+  const el = $('bc-boot-status');
+  if (el) el.textContent = text;
+}
+// Seguridad: si por lo que sea loadRooms nunca resuelve (backend caído
+// sin lanzar catch, etc.), no dejamos al usuario mirando el splash
+// para siempre.
+setTimeout(hideBootSplash, 8000);
 function sel(id){
   selectedRoom = ROOMS.find(r=>String(r.id)===String(id));
   const el = $('sel-name');
@@ -4303,8 +4375,27 @@ window.electronAPI?.onGpuProcessCrashed?.(() => { reportGpuCrashAndOfferRestart(
 
 const connectingOverlay = $('connecting-overlay');
 let connectingSafetyTimer = null;
-function showConnecting(){ connectingOverlay.style.display = 'flex'; clearTimeout(connectingSafetyTimer); connectingSafetyTimer = setTimeout(hideConnecting, 35000); }
-function hideConnecting(){ connectingOverlay.style.display = 'none'; clearTimeout(connectingSafetyTimer); }
+function setConnectingStep(n){
+  const wrap = $('connecting-overlay-steps');
+  if (!wrap) return;
+  const dots = wrap.children;
+  for (let i = 0; i < dots.length; i++) dots[i].classList.toggle('done', i <= n);
+}
+let _connectingStepTimer = null;
+function showConnecting(){
+  connectingOverlay.style.display = 'flex';
+  clearTimeout(connectingSafetyTimer);
+  connectingSafetyTimer = setTimeout(hideConnecting, 35000);
+  setConnectingStep(0);
+  clearTimeout(_connectingStepTimer);
+  _connectingStepTimer = setTimeout(() => setConnectingStep(1), 600);
+}
+function hideConnecting(){
+  setConnectingStep(2);
+  clearTimeout(_connectingStepTimer);
+  connectingOverlay.style.display = 'none';
+  clearTimeout(connectingSafetyTimer);
+}
 
 function gameWebviewDomReadyHandler(){
   try {

@@ -9,7 +9,8 @@ window.BCOriginalRenderer = function(API, params){
     description: `This is the defaultRenderer implemented using the pixi.js renderer which also has webgl/webGPU capabilities.`
   });
 
-  this.defineVariable({ name: "webGPU", description: "Whether to use WebGL or WebGPU", type: VariableType.Boolean, value: false });
+  this.defineVariable({ name: "webGPU", description: "Whether to use WebGL or WebGPU", type: VariableType.Boolean, value: true });
+  this.defineVariable({ name: "antialias", description: "Enable antialiasing (baja rendimiento, sube calidad visual)", type: VariableType.Boolean, value: false });
   this.defineVariable({ name: "extrapolation", description: "The desired extrapolation value in milliseconds", type: VariableType.Integer, value: 0, range: { min: -1000, max: 10000, step: 5 } });
   this.defineVariable({ name: "zoomCoeff", description: "Zoom Coefficient", type: VariableType.Number, value: 1.0, range: { min: 0, max: Infinity, step: 0.01 } });
   this.defineVariable({ name: "wheelZoomCoeff", description: "Defines how fast you zoom in/out with mouse wheel", type: VariableType.Number, value: 1.2, range: { min: 1, max: 10, step: 0.01 } });
@@ -1146,13 +1147,18 @@ window.BCOriginalRenderer = function(API, params){
     async function createRenderer(){
       const wantsWebGPU = thisRenderer.webGPU && await isWebGPUSupported();
 
+      // PERF: antialias/FXAA apagados por default -- en el juego real
+      // los bordes duros no se notan y esto ahorra fill-rate en GPUs
+      // medias/bajas. Si alguien lo quiere prendido (pantallas grandes,
+      // GPU potente) puede togglearlo desde thisRenderer.antialias.
+      const wantsAA = !!thisRenderer.antialias;
       const rendererOptions = {
         view: params.canvas,
-        antialias: true,
+        antialias: wantsAA,
         resolution: window.devicePixelRatio * thisRenderer.resolutionScale,
         autoDensity: false,
         backgroundColor: "#1099bb",
-        forceFXAA: true,
+        forceFXAA: wantsAA,
         legacy: false,
         powerPreference: "high-performance",
       };

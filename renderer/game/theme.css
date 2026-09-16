@@ -1,31 +1,36 @@
 ﻿/* ============================================================
    BahiaClient — theme.css
-   Estilo HaxBall + paleta BahiaClient
+   REMASTER v2 — paleta oscura "aurora", tipografía moderna,
+   glassmorphism y micro-animaciones en toda la interfaz.
    ============================================================ */
 
 :root {
-  --bc-bg:          #000;
-  --bc-surface:     #1a1a1a;
-  --bc-surface-2:   #2a2a2a;
-  --bc-border:      #000;
-  --bc-text:        #fff;
-  --bc-text-2:      #b0b0b0;
-  --bc-text-3:      #808080;
-  --bc-accent:      #3788d8;
-  --bc-accent-hover:#4a9ae8;
-  --bc-red:         #e56e56;
-  --bc-blue:        #5689e5;
-  --bc-good:        #4ade80;
-  --bc-warn:        #fbbf24;
-  --bc-bad:         #fb7185;
-  --bc-font:        Arial, Helvetica, sans-serif;
-  --bc-font-mono:   'Courier New', monospace;
+  --bc-bg:          #05070c;
+  --bc-surface:     #10131c;
+  --bc-surface-2:   #171b27;
+  --bc-border:      rgba(255,255,255,.08);
+  --bc-text:        #f1f3f8;
+  --bc-text-2:      #aab0c0;
+  --bc-text-3:      #767d90;
+  --bc-accent:      #5b8cff;
+  --bc-accent-2:    #7c5cff;
+  --bc-accent-hover:#7aa2ff;
+  --bc-red:         #ff6a6a;
+  --bc-blue:        #5b8cff;
+  --bc-good:        #3ddc97;
+  --bc-warn:        #ffc857;
+  --bc-bad:         #ff6a6a;
+  --bc-font:        'Ubuntu', 'Geist', 'Inter', system-ui, -apple-system, Segoe UI, sans-serif;
+  --bc-font-mono:   'JetBrains Mono', 'Courier New', monospace;
+  --bc-radius:      14px;
+  --bc-radius-sm:   9px;
+  --bc-glass:       rgba(16,19,28,.72);
+  --bc-shadow:      0 20px 60px rgba(0,0,0,.55);
+  --bc-ease:        cubic-bezier(.16,1,.3,1);
 
-  /* FIX: alias para selectores legacy .set-custom-* que referenciaban
-     estas variables sin que estuvieran definidas → la regla entera
-     se descartaba y las cards quedaban sin borde/color. */
-  --border:         rgba(255,255,255,.08);
-  --accent-line:    rgba(125,211,252,.35);
+  /* alias legacy */
+  --border:         var(--bc-border);
+  --accent-line:    rgba(124,92,255,.35);
   --text-4:         #6b7280;
 }
 
@@ -33,13 +38,45 @@
 
 html, body {
   width: 100%; height: 100%;
-  background: #000;
+  background:
+    radial-gradient(1400px 900px at 15% -10%, rgba(124,92,255,.10), transparent 55%),
+    radial-gradient(1200px 800px at 100% 110%, rgba(91,140,255,.10), transparent 55%),
+    var(--bc-bg);
   color: var(--bc-text);
   font-family: var(--bc-font);
   font-size: 13px;
   overflow: hidden;
   user-select: none;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Utilidad global de entrada suave: cualquier overlay/modal/panel
+   que use .on para mostrarse hereda un fade + scale prolijo en vez
+   de aparecer de golpe. */
+.bc-modal-backdrop.on,
+#bc-settings-panel.on,
+.bc-ctx-menu.on {
+  animation: bc-fade-in .18s var(--bc-ease);
+}
+.bc-modal-content {
+  animation: bc-pop-in .22s var(--bc-ease);
+}
+@keyframes bc-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bc-pop-in {
+  from { opacity: 0; transform: translateY(8px) scale(.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Botones: base global con gradiente sutil + glow al hover, para
+   que TODO botón de la interfaz (no solo los del settings panel)
+   se sienta parte del mismo sistema. */
+.bc-btn {
+  font-family: var(--bc-font);
+  border-radius: var(--bc-radius-sm);
+  transition: transform .12s var(--bc-ease), box-shadow .18s ease, filter .18s ease, background .18s ease;
+}
+.bc-btn:hover { filter: brightness(1.08); }
+.bc-btn:active { transform: scale(.97); }
 
 /* ============================================================
    LAYOUT
@@ -71,7 +108,7 @@ html, body {
   gap: 0;
   height: 44px;
   padding: 0 18px;
-  background: rgba(6,9,15,.75);
+  background: rgba(16,19,28,.75);
   border: 1px solid rgba(255,255,255,.06);
   border-radius: 12px;
   backdrop-filter: blur(16px) saturate(140%);
@@ -202,9 +239,9 @@ html, body {
 .bc-topbtn:hover svg { opacity: 1; }
 .bc-topbtn:active { transform: scale(.97); }
 .bc-topbtn.on {
-  color: #7dd3fc;
-  border-color: rgba(125,211,252,.28);
-  background: rgba(55,136,216,.1);
+  color: var(--bc-accent-hover);
+  border-color: rgba(124,92,255,.28);
+  background: rgba(91,140,255,.1);
 }
 .bc-topbtn.on svg { opacity: 1; }
 
@@ -218,15 +255,15 @@ html, body {
   right: 12px;
   width: 340px;
   padding: 14px;
-  background: rgba(11,15,22,.94);
-  border: 1px solid rgba(255,255,255,.08);
-  border-radius: 12px;
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
-  box-shadow: 0 12px 40px rgba(0,0,0,.55);
+  background: var(--bc-glass);
+  border: 1px solid var(--bc-border);
+  border-radius: var(--bc-radius);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: var(--bc-shadow), inset 0 1px 0 rgba(255,255,255,.05);
   z-index: 9998;
   display: none;
-  font-family: 'Ubuntu','Geist',Arial,sans-serif;
+  font-family: var(--bc-font);
 }
 #bc-settings-panel.on {
   display: block;
@@ -264,21 +301,21 @@ html, body {
   appearance: none;
   width: 12px; height: 12px;
   border-radius: 50%;
-  background: #7dd3fc;
+  background: var(--bc-accent-hover);
   cursor: pointer;
-  box-shadow: 0 0 6px rgba(125,211,252,.5);
+  box-shadow: 0 0 6px rgba(124,92,255,.5);
 }
 .bc-settings-row input[type="range"]::-moz-range-thumb {
   width: 12px; height: 12px;
   border: none;
   border-radius: 50%;
-  background: #7dd3fc;
+  background: var(--bc-accent-hover);
   cursor: pointer;
 }
 .bc-set-val {
   min-width: 38px;
   text-align: right;
-  color: #7dd3fc;
+  color: var(--bc-accent-hover);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   font-size: 11.5px;
@@ -321,11 +358,11 @@ html, body {
   transition: all .18s;
 }
 .bc-switch input:checked + .bc-switch-slider {
-  background: rgba(55,136,216,.45);
+  background: rgba(91,140,255,.45);
 }
 .bc-switch input:checked + .bc-switch-slider::before {
   transform: translateX(14px);
-  background: #7dd3fc;
+  background: var(--bc-accent-hover);
 }
 
 .bc-settings-action {
@@ -423,9 +460,9 @@ html, body {
 .bc-set-tab i { font-size: 14px; }
 .bc-set-tab:hover { color: #d0d4dc; background: rgba(255,255,255,.03); }
 .bc-set-tab.on {
-  color: #7dd3fc;
-  border-bottom-color: #7dd3fc;
-  background: rgba(125,211,252,.06);
+  color: #b3c2ff;
+  border-bottom-color: var(--bc-accent);
+  background: linear-gradient(180deg, rgba(91,140,255,.10), rgba(124,92,255,.04));
 }
 .bc-set-pane { display: block; }
 
@@ -518,10 +555,10 @@ html, body {
   color: inherit;
 }
 .bc-custom-card:hover {
-  background: rgba(55,136,216,.08);
-  border-color: rgba(125,211,252,.35);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 14px rgba(55,136,216,.2);
+  background: linear-gradient(135deg, rgba(91,140,255,.10), rgba(124,92,255,.06));
+  border-color: rgba(124,92,255,.4);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(91,140,255,.22);
 }
 .bc-custom-card:active { transform: translateY(0) scale(.98); }
 .bc-custom-icon {
@@ -592,7 +629,7 @@ html, body {
 #bc-chat-wrap.resizing {
   transition: none;
   box-shadow:
-    0 0 0 1.5px rgba(55,136,216,.4),
+    0 0 0 1.5px rgba(91,140,255,.4),
     0 16px 48px rgba(0,0,0,.55),
     inset 0 1px 0 rgba(255,255,255,.04);
 }
@@ -601,7 +638,7 @@ html, body {
   position: relative;
   height: 12px;
   flex-shrink: 0;
-  background: rgba(6,9,15,.55);
+  background: rgba(16,19,28,.55);
   cursor: move;
   display: flex;
   align-items: center;
@@ -610,7 +647,7 @@ html, body {
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   transition: background .15s;
 }
-#bc-chat-drag:hover { background: rgba(6,9,15,.95); }
+#bc-chat-drag:hover { background: rgba(16,19,28,.95); }
 #bc-chat-drag::before {
   content: '';
   width: 44px; height: 3px;
@@ -674,9 +711,9 @@ html, body {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 10px 18px;
-  background: rgba(6,9,15,.45);
+  background: rgba(16,19,28, var(--bc-chat-opacity, .45));
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--bc-chat-fontsize, 14px);
   line-height: 1.55;
   color: #d8dce4;
   scrollbar-width: thin;
@@ -758,7 +795,7 @@ html, body {
   margin: 2px -6px;
 }
 #bc-chat .msg.news {
-  color: #7dd3fc;
+  color: var(--bc-accent-hover);
   font-weight: 500;
   padding: 6px 10px;
   margin: 2px -6px;
@@ -791,7 +828,7 @@ html, body {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  background: rgba(6,9,15,.55);
+  background: rgba(16,19,28,.55);
   border-top: 1px solid rgba(255,255,255,.05);
   padding: 0 18px;
   backdrop-filter: blur(16px) saturate(140%);
@@ -838,35 +875,83 @@ html, body {
   position: fixed; inset: 0;
   display: flex; flex-direction: column;
   align-items: center; justify-content: center;
-  gap: 20px;
-  background: #000;
+  gap: 22px;
+  background:
+    radial-gradient(1200px 800px at 50% 120%, rgba(91,140,255,.16), transparent 60%),
+    radial-gradient(900px 600px at 15% -10%, rgba(124,58,237,.12), transparent 55%),
+    #05070c;
+  background-size: 200% 200%;
+  animation: bc-status-bg 12s ease-in-out infinite;
   z-index: 20000;
   color: #b0b0b0;
   font-family: var(--bc-font);
   font-size: 14px;
+  opacity: 1;
+  transition: opacity .35s ease;
 }
-#bc-status.hidden { display: none; }
+#bc-status.hidden { opacity: 0; pointer-events: none; }
+@keyframes bc-status-bg {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
 
 #bc-status .spinner {
-  width: 40px; height: 40px;
-  border: 3px solid #2a2a2a;
-  border-top-color: var(--bc-accent);
+  position: relative;
+  width: 52px; height: 52px;
+}
+#bc-status .spinner::before,
+#bc-status .spinner::after {
+  content: '';
+  position: absolute; inset: 0;
   border-radius: 50%;
-  animation: bc-spin .8s linear infinite;
+  border: 3px solid transparent;
+}
+#bc-status .spinner::before {
+  border-top-color: var(--bc-accent);
+  border-right-color: var(--bc-accent);
+  animation: bc-spin .9s cubic-bezier(.6,.1,.4,.9) infinite;
+  opacity: .95;
+}
+#bc-status .spinner::after {
+  border-bottom-color: rgba(255,255,255,.15);
+  animation: bc-spin 1.6s linear infinite reverse;
 }
 @keyframes bc-spin { to { transform: rotate(360deg); } }
 
 #bc-status .title {
   color: #fff;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 16px;
+  letter-spacing: .2px;
+  animation: bc-status-fade .25s ease;
 }
 #bc-status .desc {
-  color: #808080;
+  color: #7f8794;
   font-size: 13px;
-  max-width: 400px;
+  max-width: 420px;
   text-align: center;
   line-height: 1.6;
+}
+@keyframes bc-status-fade {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Barra de progreso por etapas (5 pasos: iniciando, credenciales,
+   imágenes, conectando, renderer). JS le agrega la clase step-N. */
+#bc-status .bc-status-steps {
+  display: flex;
+  gap: 6px;
+}
+#bc-status .bc-status-steps span {
+  width: 26px; height: 3px;
+  border-radius: 2px;
+  background: rgba(255,255,255,.12);
+  transition: background .3s ease, box-shadow .3s ease;
+}
+#bc-status .bc-status-steps span.done {
+  background: var(--bc-accent);
+  box-shadow: 0 0 8px rgba(91,140,255,.6);
 }
 
 /* ============================================================
@@ -874,7 +959,7 @@ html, body {
    ============================================================ */
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: #1a1a1a; }
+::-webkit-scrollbar-track { background: var(--bc-surface); }
 ::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #4a4a4a; }
 
@@ -939,8 +1024,8 @@ html, body {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(125,211,252,.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(125,211,252,.03) 1px, transparent 1px);
+    linear-gradient(rgba(124,92,255,.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124,92,255,.03) 1px, transparent 1px);
   background-size: 60px 60px;
   mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
   -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
@@ -983,7 +1068,7 @@ html, body {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(ellipse 800px 300px at 50% 0%, rgba(55,136,216,.06), transparent 70%),
+    radial-gradient(ellipse 800px 300px at 50% 0%, rgba(91,140,255,.09), transparent 70%),
     linear-gradient(180deg, #0f141d 0%, #0a0e15 100%);
   border: 1px solid rgba(255,255,255,.06);
   border-top-color: rgba(255,255,255,.14);
@@ -1073,7 +1158,7 @@ html, body {
 #bc-modal-link {
   background: rgba(34,211,238,.08) !important;
   border-color: rgba(34,211,238,.2) !important;
-  color: #7dd3fc !important;
+  color: var(--bc-accent-hover) !important;
 }
 #bc-modal-link:hover {
   background: rgba(34,211,238,.16) !important;
@@ -1190,8 +1275,8 @@ html, body {
 .bc-team-col[data-team="spec"] { opacity: .88; }
 
 .bc-team-col.drag-over {
-  background: rgba(55,136,216,.15) !important;
-  box-shadow: inset 0 0 0 2px rgba(55,136,216,.55);
+  background: rgba(91,140,255,.15) !important;
+  box-shadow: inset 0 0 0 2px rgba(91,140,255,.55);
 }
 .bc-team-col[data-team="red"].drag-over {
   background: rgba(239,68,68,.15) !important;
@@ -1386,9 +1471,9 @@ html, body {
 .bc-info-input::-webkit-outer-spin-button,
 .bc-info-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .bc-info-input:focus {
-  border-color: rgba(125,211,252,.55);
+  border-color: rgba(124,92,255,.55);
   background: rgba(0,0,0,.55);
-  box-shadow: 0 0 0 3px rgba(125,211,252,.14);
+  box-shadow: 0 0 0 3px rgba(124,92,255,.14);
 }
 .bc-info-input:disabled {
   background: transparent;
@@ -1467,7 +1552,7 @@ html, body {
   text-align: left !important;
 }
 .bc-ctx-item:hover {
-  background: rgba(55,136,216,.16) !important;
+  background: rgba(91,140,255,.16) !important;
   color: #fff !important;
 }
 .bc-ctx-item:active { transform: scale(.98); }
@@ -1494,14 +1579,14 @@ html, body {
   z-index: 99999;
   padding: 6px 14px;
   background: rgba(15,19,27,.96);
-  border: 1px solid rgba(125,211,252,.5);
+  border: 1px solid rgba(124,92,255,.5);
   border-radius: 8px;
   color: #fff;
   font-family: Ubuntu, Arial, sans-serif;
   font-size: 13px;
   font-weight: 600;
   transform: translate(-50%, -50%);
-  box-shadow: 0 8px 24px rgba(0,0,0,.6), 0 0 12px rgba(125,211,252,.25);
+  box-shadow: 0 8px 24px rgba(0,0,0,.6), 0 0 12px rgba(124,92,255,.25);
   white-space: nowrap;
   max-width: 220px;
   overflow: hidden;
@@ -1577,8 +1662,8 @@ html, body {
   transition: border-color .15s, box-shadow .15s;
 }
 #bc-dialog input:focus {
-  border-color: rgba(125,211,252,.55);
-  box-shadow: 0 0 0 3px rgba(125,211,252,.14);
+  border-color: rgba(124,92,255,.55);
+  box-shadow: 0 0 0 3px rgba(124,92,255,.14);
 }
 #bc-dialog .bc-dialog-actions {
   display: flex;
@@ -1604,14 +1689,14 @@ html, body {
 }
 #bc-dialog button:active { transform: scale(.97); }
 #bc-dialog button.bc-dialog-ok {
-  background: linear-gradient(180deg, #3788d8 0%, #2a6db8 100%);
-  border-color: rgba(55,136,216,.6);
+  background: linear-gradient(180deg, var(--bc-accent) 0%, #2a6db8 100%);
+  border-color: rgba(91,140,255,.6);
   color: #fff;
-  box-shadow: 0 4px 14px rgba(55,136,216,.35);
+  box-shadow: 0 4px 14px rgba(91,140,255,.35);
 }
 #bc-dialog button.bc-dialog-ok:hover {
-  background: linear-gradient(180deg, #4a9ae8 0%, #3579c4 100%);
-  box-shadow: 0 6px 20px rgba(55,136,216,.5);
+  background: linear-gradient(180deg, var(--bc-accent-hover) 0%, #3579c4 100%);
+  box-shadow: 0 6px 20px rgba(91,140,255,.5);
 }
 #bc-dialog button.bc-dialog-danger {
   background: linear-gradient(180deg, #dc2626 0%, #a81d1d 100%);
@@ -1662,7 +1747,7 @@ html, body {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(ellipse 600px 200px at 50% 0%, rgba(55,136,216,.08), transparent 70%),
+    radial-gradient(ellipse 600px 200px at 50% 0%, rgba(91,140,255,.08), transparent 70%),
     linear-gradient(180deg, #0f141d 0%, #0a0e15 100%);
   border: 1px solid rgba(255,255,255,.08);
   border-top-color: rgba(255,255,255,.14);
@@ -1690,7 +1775,7 @@ html, body {
   align-items: center;
   gap: 10px;
 }
-.reskin-title i { color: #7dd3fc; font-size: 18px; }
+.reskin-title i { color: var(--bc-accent-hover); font-size: 18px; }
 
 .reskin-tabs {
   display: flex;
@@ -1722,9 +1807,9 @@ html, body {
 .reskin-tab i { font-size: 14px; }
 .reskin-tab:hover { color: #d0d4dc; background: rgba(255,255,255,.03); }
 .reskin-tab.on {
-  color: #7dd3fc;
-  border-bottom-color: #7dd3fc;
-  background: rgba(125,211,252,.06);
+  color: var(--bc-accent-hover);
+  border-bottom-color: var(--bc-accent-hover);
+  background: rgba(124,92,255,.06);
 }
 
 .reskin-body {
@@ -1748,7 +1833,7 @@ html, body {
   font-weight: 800;
   letter-spacing: .7px;
   text-transform: uppercase;
-  color: #7dd3fc;
+  color: var(--bc-accent-hover);
   margin-bottom: 11px;
   display: flex;
   align-items: center;
@@ -1758,7 +1843,7 @@ html, body {
   content: '';
   flex: 1;
   height: 1px;
-  background: linear-gradient(90deg, rgba(125,211,252,.25), transparent);
+  background: linear-gradient(90deg, rgba(124,92,255,.25), transparent);
 }
 
 .reskin-grid {
@@ -1786,15 +1871,15 @@ html, body {
   color: inherit;
 }
 .reskin-swatch:hover {
-  border-color: rgba(125,211,252,.35);
+  border-color: rgba(124,92,255,.35);
   background: rgba(255,255,255,.06);
   transform: translateY(-2px);
   box-shadow: 0 6px 16px rgba(0,0,0,.4);
 }
 .reskin-swatch.on {
-  border-color: #7dd3fc;
-  background: rgba(125,211,252,.08);
-  box-shadow: 0 0 0 1px rgba(125,211,252,.4), 0 6px 16px rgba(125,211,252,.2);
+  border-color: var(--bc-accent-hover);
+  background: rgba(124,92,255,.08);
+  box-shadow: 0 0 0 1px rgba(124,92,255,.4), 0 6px 16px rgba(124,92,255,.2);
 }
 .reskin-swatch-sm {
   padding: 5px;
@@ -1861,9 +1946,9 @@ html, body {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #7dd3fc;
+  background: var(--bc-accent-hover);
   cursor: pointer;
-  box-shadow: 0 0 8px rgba(125,211,252,.6);
+  box-shadow: 0 0 8px rgba(124,92,255,.6);
   transition: transform .15s ease;
 }
 .reskin-row input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
@@ -1872,13 +1957,13 @@ html, body {
   height: 14px;
   border: none;
   border-radius: 50%;
-  background: #7dd3fc;
+  background: var(--bc-accent-hover);
   cursor: pointer;
 }
 .reskin-val {
   min-width: 48px;
   text-align: right;
-  color: #7dd3fc;
+  color: var(--bc-accent-hover);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   font-size: 11.5px;
@@ -1937,14 +2022,14 @@ html, body {
   transform: translateY(-1px);
 }
 .reskin-foot .fb.p {
-  background: linear-gradient(180deg, #3788d8 0%, #2a6db8 100%);
-  border-color: rgba(55,136,216,.6);
+  background: linear-gradient(180deg, var(--bc-accent) 0%, #2a6db8 100%);
+  border-color: rgba(91,140,255,.6);
   color: #fff;
-  box-shadow: 0 4px 14px rgba(55,136,216,.35);
+  box-shadow: 0 4px 14px rgba(91,140,255,.35);
 }
 .reskin-foot .fb.p:hover {
-  background: linear-gradient(180deg, #4a9ae8 0%, #3579c4 100%);
-  box-shadow: 0 6px 20px rgba(55,136,216,.5);
+  background: linear-gradient(180deg, var(--bc-accent-hover) 0%, #3579c4 100%);
+  box-shadow: 0 6px 20px rgba(91,140,255,.5);
 }
 .reskin-foot .fb.danger {
   background: rgba(244,63,94,.1);
@@ -1967,7 +2052,7 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
-  background: rgba(6,9,15,.82);
+  background: rgba(16,19,28,.82);
   border: 1px solid rgba(255,255,255,.07);
   border-radius: 12px;
   backdrop-filter: blur(16px) saturate(140%);

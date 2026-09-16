@@ -258,6 +258,20 @@
 
     <div class="bc-settings-divider"></div>
 
+    <div class="bc-settings-row">
+      <label>Opacidad del chat</label>
+      <input type="range" id="bc-set-chat-opacity" min="10" max="100" value="45">
+      <span class="bc-set-val" id="bc-set-chat-opacity-val">45%</span>
+    </div>
+
+    <div class="bc-settings-row">
+      <label>Tamaño de letra (chat)</label>
+      <input type="range" id="bc-set-chat-fontsize" min="11" max="22" value="14">
+      <span class="bc-set-val" id="bc-set-chat-fontsize-val">14px</span>
+    </div>
+
+    <div class="bc-settings-divider"></div>
+
     <div class="bc-settings-row bc-settings-toggle">
       <label>Mostrar FPS y ping</label>
       <label class="bc-switch">
@@ -432,6 +446,9 @@
   <div class="spinner"></div>
   <div class="title" id="bc-status-title">Conectando…</div>
   <div class="desc" id="bc-status-desc"></div>
+  <div class="bc-status-steps" id="bc-status-steps">
+    <span></span><span></span><span></span><span></span><span></span>
+  </div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js" crossorigin="anonymous"></script>

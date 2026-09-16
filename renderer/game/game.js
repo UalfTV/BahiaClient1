@@ -148,11 +148,22 @@ window.BCGameEvents = window.BCGameEvents || {
     return _tbEls;
   }
 
+  var STATUS_STEPS = ['Iniciando...', 'Obteniendo credenciales...', 'Cargando imagenes...', 'Conectando a la sala...', 'Iniciando renderer...'];
+
   function setStatus(title, desc) {
     $status.classList.remove('hidden');
     $statusTitle.style.color = '';
     $statusTitle.textContent = title || 'Cargando...';
     $statusDesc.textContent = desc || '';
+
+    var idx = STATUS_STEPS.indexOf(title);
+    var stepsEl = document.getElementById('bc-status-steps');
+    if (stepsEl && idx >= 0) {
+      var dots = stepsEl.children;
+      for (var i = 0; i < dots.length; i++) {
+        dots[i].classList.toggle('done', i <= idx);
+      }
+    }
   }
 
   function hideStatus() {
@@ -1231,7 +1242,7 @@ window.BCGameEvents = window.BCGameEvents || {
   var SETTINGS_KEY = 'bc_game_settings_v1';
   // FIX #2: zoom en % (100 = 1.0x). Antes era 100, que pisaba el 2.6
   // inicial del renderer en applySettings(). Ahora 260 = 2.6x.
-  var defaultSettings = { volume: 35, zoom: 260, quality: 100, showFps: false, showPing: false };
+  var defaultSettings = { volume: 35, zoom: 260, quality: 100, showFps: false, showPing: false, chatOpacity: 45, chatFontSize: 14 };
 
   function loadSettings() {
     try {
@@ -1246,6 +1257,8 @@ window.BCGameEvents = window.BCGameEvents || {
   }
 
   var gameSettings = loadSettings();
+  document.documentElement.style.setProperty('--bc-chat-opacity', (gameSettings.chatOpacity / 100).toFixed(2));
+  document.documentElement.style.setProperty('--bc-chat-fontsize', gameSettings.chatFontSize + 'px');
 
   var $settingsPanel = document.getElementById('bc-settings-panel');
   var $btnSettings = document.getElementById('bc-btn-settings');
@@ -1256,6 +1269,10 @@ window.BCGameEvents = window.BCGameEvents || {
   var $setQuality = document.getElementById('bc-set-quality');
   var $setQualityVal = document.getElementById('bc-set-quality-val');
   var $setShowFps = document.getElementById('bc-set-showfps');
+  var $setChatOpacity = document.getElementById('bc-set-chat-opacity');
+  var $setChatOpacityVal = document.getElementById('bc-set-chat-opacity-val');
+  var $setChatFontSize = document.getElementById('bc-set-chat-fontsize');
+  var $setChatFontSizeVal = document.getElementById('bc-set-chat-fontsize-val');
   var $setResetChat = document.getElementById('bc-set-reset-chat');
   var $setResetAll = document.getElementById('bc-set-reset-all');
 
@@ -1371,11 +1388,13 @@ window.BCGameEvents = window.BCGameEvents || {
       }
     }
     if (window.__bcRenderer) {
-      if (!window.__bcRenderer.targetFPS) window.__bcRenderer.targetFPS = 180;
+      if (!window.__bcRenderer.targetFPS) window.__bcRenderer.targetFPS = 0; // FULL FPS: sin límite artificial
       window.__bcRenderer.resolutionScale = gameSettings.quality / 100;
       window.__bcRenderer.showFPS = false;
       window.__bcRenderer.showNetGraph = false;
     }
+    document.documentElement.style.setProperty('--bc-chat-opacity', (gameSettings.chatOpacity / 100).toFixed(2));
+    document.documentElement.style.setProperty('--bc-chat-fontsize', gameSettings.chatFontSize + 'px');
     updatePerfDisplay();
   }
 
@@ -1383,6 +1402,8 @@ window.BCGameEvents = window.BCGameEvents || {
     if ($setVolume) { $setVolume.value = gameSettings.volume; $setVolumeVal.textContent = gameSettings.volume + '%'; }
     if ($setZoom) { $setZoom.value = gameSettings.zoom; $setZoomVal.textContent = (gameSettings.zoom / 100).toFixed(2) + 'x'; }
     if ($setQuality) { $setQuality.value = gameSettings.quality; $setQualityVal.textContent = gameSettings.quality + '%'; }
+    if ($setChatOpacity) { $setChatOpacity.value = gameSettings.chatOpacity; $setChatOpacityVal.textContent = gameSettings.chatOpacity + '%'; }
+    if ($setChatFontSize) { $setChatFontSize.value = gameSettings.chatFontSize; $setChatFontSizeVal.textContent = gameSettings.chatFontSize + 'px'; }
     if ($setShowFps) {
       var perfOn = false;
       try { perfOn = localStorage.getItem('bc_perf_overlay') === '1'; } catch(e){}
@@ -1455,6 +1476,22 @@ window.BCGameEvents = window.BCGameEvents || {
     $setZoom.addEventListener('input', function () {
       gameSettings.zoom = parseInt(this.value, 10);
       $setZoomVal.textContent = (gameSettings.zoom / 100).toFixed(2) + 'x';
+      saveSettings(gameSettings);
+      applySettings();
+    });
+  }
+  if ($setChatOpacity) {
+    $setChatOpacity.addEventListener('input', function () {
+      gameSettings.chatOpacity = parseInt(this.value, 10);
+      $setChatOpacityVal.textContent = gameSettings.chatOpacity + '%';
+      saveSettings(gameSettings);
+      applySettings();
+    });
+  }
+  if ($setChatFontSize) {
+    $setChatFontSize.addEventListener('input', function () {
+      gameSettings.chatFontSize = parseInt(this.value, 10);
+      $setChatFontSizeVal.textContent = gameSettings.chatFontSize + 'px';
       saveSettings(gameSettings);
       applySettings();
     });
@@ -1827,7 +1864,7 @@ window.BCGameEvents = window.BCGameEvents || {
           return;
         }
 
-        rendererObj.targetFPS = 180;
+        rendererObj.targetFPS = 0; // FULL FPS: sin límite artificial
         rendererObj.resolutionScale = 1.0;
         rendererObj.showFPS = false;
         rendererObj.showInputLag = false;
@@ -1932,12 +1969,56 @@ window.BCGameEvents = window.BCGameEvents || {
 
         $chat.addEventListener('click', function () { openChatInput(); });
 
+        // Comandos LOCALES del cliente. Se manejan acá y nunca se
+        // mandan al servidor (a diferencia de /extrapolation en el
+        // haxball original, que el server no necesita ver: es 100%
+        // client-side, ajusta cuánto "adivina" tu propio renderer).
+        function tryLocalCommand(raw) {
+          var m = /^\/extrapolation(?:\s+(-?\d+))?\s*$/i.exec(raw);
+          if (!m) return false;
+
+          var rend = window.__bcRenderer;
+          if (!rend) {
+            pushChat(null, 'El renderer todavía no está listo.', null, 'system');
+            return true;
+          }
+
+          if (m[1] === undefined) {
+            pushChat(null, 'Extrapolation actual: ' + (rend.extrapolation || 0) + ' ms. Uso: /extrapolation <ms>', null, 'system');
+            return true;
+          }
+
+          var ms = parseInt(m[1], 10);
+          ms = Math.max(-1000, Math.min(10000, ms));
+          try {
+            rend.extrapolation = ms;
+            try { localStorage.setItem('bc_extrapolation_ms', String(ms)); } catch (e) {}
+            pushChat(null, 'Extrapolation ajustada a ' + ms + ' ms.', null, 'system');
+          } catch (e) {
+            pushChat(null, 'No se pudo aplicar extrapolation: ' + e.message, null, 'system');
+          }
+          return true;
+        }
+
+        // Restaurar el valor guardado la última vez, apenas el renderer exista.
+        (function restoreExtrapolation() {
+          var saved = null;
+          try { saved = localStorage.getItem('bc_extrapolation_ms'); } catch (e) {}
+          if (saved == null) return;
+          var apply = function () {
+            if (window.__bcRenderer) window.__bcRenderer.extrapolation = parseInt(saved, 10);
+            else setTimeout(apply, 200);
+          };
+          apply();
+        })();
+
         $chatText.addEventListener('keydown', function (ev) {
           if (ev.key === 'Enter' && !ev.shiftKey) {
             ev.preventDefault();
             var msg = $chatText.value.trim();
             if (!msg) { closeChatInput(); return; }
             $chatText.value = '';
+            if (msg.charAt(0) === '/' && tryLocalCommand(msg)) { closeChatInput(); return; }
             if (r.sendChat) { try { r.sendChat(msg); } catch (e) {} }
             closeChatInput();
           } else if (ev.key === 'Escape') {
