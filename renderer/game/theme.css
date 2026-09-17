@@ -111,8 +111,8 @@ html, body {
   background: rgba(16,19,28,.75);
   border: 1px solid rgba(255,255,255,.06);
   border-radius: 12px;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   box-shadow: 0 6px 24px rgba(0,0,0,.45);
   font-family: 'Ubuntu','Geist',Arial,sans-serif;
   font-variant-numeric: tabular-nums;
@@ -221,8 +221,8 @@ html, body {
   font-weight: 500;
   letter-spacing: -.1px;
   cursor: pointer;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   transition: all .15s ease;
 }
 .bc-topbtn svg {
@@ -258,8 +258,8 @@ html, body {
   background: var(--bc-glass);
   border: 1px solid var(--bc-border);
   border-radius: var(--bc-radius);
-  backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
   box-shadow: var(--bc-shadow), inset 0 1px 0 rgba(255,255,255,.05);
   z-index: 9998;
   display: none;
@@ -643,8 +643,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   transition: background .15s;
 }
 #bc-chat-drag:hover { background: rgba(16,19,28,.95); }
@@ -718,8 +718,8 @@ html, body {
   color: #d8dce4;
   scrollbar-width: thin;
   scrollbar-color: rgba(255,255,255,.08) transparent;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   transition: opacity .12s ease;
   z-index: 20000 !important;
 }
@@ -831,8 +831,8 @@ html, body {
   background: rgba(16,19,28,.55);
   border-top: 1px solid rgba(255,255,255,.05);
   padding: 0 18px;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   position: relative;
   transition: opacity .12s ease, box-shadow .15s ease;
   z-index: 20000 !important;
@@ -880,8 +880,6 @@ html, body {
     radial-gradient(1200px 800px at 50% 120%, rgba(91,140,255,.16), transparent 60%),
     radial-gradient(900px 600px at 15% -10%, rgba(124,58,237,.12), transparent 55%),
     #05070c;
-  background-size: 200% 200%;
-  animation: bc-status-bg 12s ease-in-out infinite;
   z-index: 20000;
   color: #b0b0b0;
   font-family: var(--bc-font);
@@ -890,10 +888,6 @@ html, body {
   transition: opacity .35s ease;
 }
 #bc-status.hidden { opacity: 0; pointer-events: none; }
-@keyframes bc-status-bg {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-}
 
 #bc-status .spinner {
   position: relative;
@@ -1056,8 +1050,8 @@ html, body {
   position: absolute;
   inset: 0;
   background: rgba(2,4,8,.5) !important;
-  backdrop-filter: blur(8px) !important;
-  -webkit-backdrop-filter: blur(8px) !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
   animation: bc-fade-in .2s ease-out;
 }
 
@@ -1411,6 +1405,18 @@ html, body {
   font-size: 13px;
   flex-shrink: 0;
 }
+/* Check de "usa BahiaClient", en el scoreboard y en el chat */
+.bc-verified {
+  color: #5be08a;
+  text-shadow: 0 0 6px rgba(91,224,138,.55);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+.msg .bc-verified {
+  margin-right: 4px;
+}
 .bc-player-row .ping {
   font-family: 'Ubuntu Mono', ui-monospace, monospace;
   font-size: 11.5px;
@@ -1502,8 +1508,8 @@ html, body {
   z-index: 99999 !important;
   font-family: 'Ubuntu','Geist',Arial,sans-serif !important;
   font-size: 13px !important;
-  backdrop-filter: blur(20px) saturate(140%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(140%) !important;
+  backdrop-filter: blur(5px) !important;
+  -webkit-backdrop-filter: blur(5px) !important;
   animation: bc-ctx-in .12s cubic-bezier(.16,1,.3,1);
 }
 @keyframes bc-ctx-in {
@@ -1604,8 +1610,8 @@ html, body {
 #bc-dialog-backdrop {
   position: fixed; inset: 0;
   background: rgba(2,4,8,.65);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   z-index: 200000;
   display: flex;
   align-items: center;
@@ -1735,8 +1741,8 @@ html, body {
   justify-content: center;
   z-index: 30000;
   background: rgba(2,4,8,.72);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   font-family: 'Ubuntu','Geist',Arial,sans-serif;
 }
 #bc-reskin-modal.on { display: flex; animation: bc-fade-in .2s ease-out; }
@@ -2055,8 +2061,8 @@ html, body {
   background: rgba(16,19,28,.82);
   border: 1px solid rgba(255,255,255,.07);
   border-radius: 12px;
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   box-shadow: 0 6px 24px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
   z-index: 9999;
   font-family: 'Ubuntu','Geist','Inter',system-ui,sans-serif;

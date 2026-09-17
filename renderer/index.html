@@ -7,9 +7,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Ubuntu:wght@300;400;500;700&family=Ubuntu+Mono:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
-<script src="https://cdn.jsdelivr.net/gh/wxyz-abcd/node-haxball@latest/examples_web/src/vendor/json5.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/wxyz-abcd/node-haxball@latest/examples_web/src/vendor/pako-jszip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/wxyz-abcd/node-haxball@latest/src/api.js"></script>
+<script src="vendor/json5.min.js"></script>
+<script src="vendor/pako-jszip.min.js"></script>
+<script src="vendor/api.js"></script>
+<script>
+  if (typeof abcHaxballAPI !== 'function') {
+    console.error('[BC] vendor/api.js no definio abcHaxballAPI — revisa que la carpeta vendor/ este junto al index.html');
+  }
+</script>
 <script src="voice-core.js"></script>
 <style>
 :root{
@@ -48,13 +53,13 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
   radial-gradient(ellipse at 30% 10%,rgba(124,58,237,.13) 0%,transparent 55%),
   radial-gradient(ellipse at 70% 20%,rgba(168,85,247,.10) 0%,transparent 55%),
   radial-gradient(ellipse at 50% 0%,rgba(124,58,237,.06) 0%,transparent 60%);
-  filter:blur(20px);animation:driftA 30s ease-in-out infinite}
+  will-change:transform;animation:driftA 30s ease-in-out infinite}
 .ambient2{bottom:-180px;right:-100px;width:600px;height:600px;background:
   radial-gradient(ellipse,rgba(124,58,237,.08) 0%,rgba(124,58,237,.05) 45%,transparent 70%);
-  filter:blur(16px);animation:driftB 34s ease-in-out infinite}
+  will-change:transform;animation:driftB 34s ease-in-out infinite}
 @keyframes driftA{0%,100%{transform:translateX(-50%) translateY(0) scale(1)}50%{transform:translateX(-46%) translateY(24px) scale(1.05)}}
 @keyframes driftB{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-30px,-20px) scale(1.08)}}
-.titlebar{min-height:56px;background:rgba(7,7,14,.92);backdrop-filter:blur(24px) saturate(180%);-webkit-backdrop-filter:blur(24px) saturate(180%);display:flex;align-items:center;padding:8px 14px;gap:10px;flex-shrink:0;border-bottom:1px solid var(--border);z-index:60;position:relative;-webkit-app-region:drag;flex-wrap:nowrap;overflow:visible}
+.titlebar{min-height:56px;background:rgba(7,7,14,.96);backdrop-filter:blur(6px) saturate(140%);-webkit-backdrop-filter:blur(6px) saturate(140%);display:flex;align-items:center;padding:8px 14px;gap:10px;flex-shrink:0;border-bottom:1px solid var(--border);z-index:60;position:relative;-webkit-app-region:drag;flex-wrap:nowrap;overflow:visible}
 .titlebar>*{-webkit-app-region:no-drag}
 .titlebar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(192,132,252,.15),transparent);pointer-events:none}
 .logo{display:flex;align-items:center;gap:10px;flex-shrink:0}
@@ -123,7 +128,7 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
 .wc-btn:hover{background:var(--accent-tint);color:#c084fc}
 .wc-btn.close:hover{background:rgba(244,63,94,.18);color:#fb7185}
 .body{flex:1;display:flex;min-height:0;z-index:1;position:relative}
-.sidebar{width:60px;background:rgba(7,7,14,.7);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:5px;flex-shrink:0;z-index:2;position:relative}
+.sidebar{width:60px;background:rgba(7,7,14,.92);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-right:1px solid var(--border);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:5px;flex-shrink:0;z-index:2;position:relative}
 .sidebar::after{content:'';position:absolute;top:0;right:0;bottom:0;width:1px;background:linear-gradient(180deg,transparent,rgba(192,132,252,.14),transparent);pointer-events:none}
 .sb{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--text-4);cursor:pointer;position:relative;border:1px solid transparent;transition:all .24s var(--ease-soft)}
 .sb:hover{background:rgba(124,58,237,.08);color:#a78bfa;transform:translateY(-1px)}
@@ -218,7 +223,7 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
 .fb.danger{color:#fb7185}
 .fb.danger:hover{background:rgba(244,63,94,.12);border-color:rgba(244,63,94,.35);color:var(--bad)}
 .game-overlay{position:absolute;top:var(--tb-h,56px);right:0;bottom:0;left:0;display:flex;flex-direction:column;background:#000;z-index:50}
-.game-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:rgba(7,7,14,.98);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid var(--border);flex-shrink:0;position:relative}
+.game-bar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:rgba(7,7,14,.98);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-bottom:1px solid var(--border);flex-shrink:0;position:relative}
 .game-bar::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(192,132,252,.18),transparent);pointer-events:none}
 .game-room-name{flex:1;font-size:13px;font-weight:700;color:#e8ddf5;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 14px;letter-spacing:-.15px}
 .game-update-badge{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,rgba(37,99,235,.18),rgba(124,58,237,.14));border:1px solid var(--accent-line);border-radius:20px;padding:5px 11px;font-size:11px;font-weight:800;color:#c084fc;cursor:pointer;flex-shrink:0;letter-spacing:.2px;transition:all .2s var(--ease-soft);animation:updatePulse 2.5s ease-in-out infinite}
@@ -238,18 +243,22 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
 .webview-wrap webview{flex:1;width:100%;border:none}
 .connecting-overlay{
   position:absolute;inset:0;z-index:20;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
   background:
     radial-gradient(1000px 700px at 50% 120%,rgba(168,85,247,.14),transparent 60%),
     radial-gradient(800px 500px at 15% -10%,rgba(124,58,237,.12),transparent 55%),
     var(--bg);
-  background-size:200% 200%;
-  animation:bc-boot-bg 10s ease-in-out infinite;
   color:var(--text-2);font-size:13.5px;font-weight:600;
   opacity:1;transition:opacity .3s var(--ease-out);
 }
-.connecting-overlay .ball{font-size:34px;background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:ballSpin 1.2s linear infinite,ballBounce 1.2s ease-in-out infinite}
-.connecting-overlay .co-steps{display:flex;gap:6px}
+.connecting-overlay .co-ball-wrap{position:relative;width:56px;height:56px;display:flex;align-items:center;justify-content:center}
+.connecting-overlay .co-ring{position:absolute;inset:0;border-radius:50%;border:2.5px solid rgba(168,85,247,.18);border-top-color:var(--accent-2,#a855f7);animation:co-spin .9s linear infinite;will-change:transform}
+.connecting-overlay .ball{font-size:26px;background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:co-pulse 1.4s ease-in-out infinite;will-change:transform}
+@keyframes co-spin{to{transform:rotate(360deg)}}
+@keyframes co-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+.connecting-overlay .co-title{font-size:14.5px;font-weight:700;color:var(--text-1,#fff);letter-spacing:-.1px}
+.connecting-overlay .co-sub{font-size:12px;font-weight:500;color:var(--text-3);opacity:.8}
+.connecting-overlay .co-steps{display:flex;gap:6px;margin-top:2px}
 .connecting-overlay .co-steps span{width:22px;height:3px;border-radius:2px;background:rgba(255,255,255,.12);transition:background .3s ease,box-shadow .3s ease}
 .connecting-overlay .co-steps span.done{background:var(--accent-2);box-shadow:0 0 8px rgba(168,85,247,.55)}
 
@@ -873,8 +882,12 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
     <div class="webview-wrap">
       <webview id="game-webview" allowpopups partition="persist:haxball-game"></webview>
       <div class="connecting-overlay" id="connecting-overlay" style="display:none">
-        <i class="ti ti-ball-football ball"></i>
-        <div id="connecting-overlay-text">Conectando a la sala…</div>
+        <div class="co-ball-wrap">
+          <div class="co-ring"></div>
+          <i class="ti ti-ball-football ball"></i>
+        </div>
+        <div class="co-title" id="connecting-overlay-text">Conectando a la sala…</div>
+        <div class="co-sub">Esto puede tardar unos segundos</div>
         <div class="co-steps" id="connecting-overlay-steps">
           <span></span><span></span><span></span>
         </div>
@@ -4424,9 +4437,69 @@ function gameWebviewDomReadyHandler(){
   } catch(e){}
 }
 
-function enterRoom(){
+function bcAskRoomPassword(){
+  return new Promise(function(resolve){
+    var bg = document.createElement('div');
+    bg.style.cssText = 'position:fixed;inset:0;background:rgba(2,4,8,.72);z-index:999999;display:flex;align-items:center;justify-content:center;font-family:inherit;animation:bc-fade-in .15s ease-out';
+    var box = document.createElement('div');
+    box.style.cssText = 'width:320px;max-width:calc(100vw - 40px);background:linear-gradient(180deg,#141a26 0%,#0a0e15 100%);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:22px;color:#fff;box-shadow:0 30px 80px rgba(0,0,0,.7)';
+    box.innerHTML =
+      '<div style="font-weight:700;font-size:15px;margin-bottom:8px;display:flex;align-items:center;gap:8px;"><i class="ti ti-lock" style="color:#a855f7"></i>Sala con contrasena</div>' +
+      '<div style="font-size:13px;color:#9aa3b2;margin-bottom:14px;line-height:1.5;">Esta sala requiere contrasena para entrar.</div>';
+    var input = document.createElement('input');
+    input.type = 'password';
+    input.placeholder = 'Contrasena';
+    input.maxLength = 100;
+    input.style.cssText = 'width:100%;box-sizing:border-box;padding:10px 12px;border-radius:9px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#fff;font-size:14px;margin-bottom:14px;outline:none;font-family:inherit';
+    box.appendChild(input);
+    var actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancelar';
+    cancelBtn.style.cssText = 'padding:9px 16px;border-radius:9px;border:1px solid rgba(255,255,255,.12);background:transparent;color:#c8c8d4;cursor:pointer;font-size:13px;font-family:inherit';
+    var okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.textContent = 'Entrar';
+    okBtn.style.cssText = 'padding:9px 16px;border-radius:9px;border:none;background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;font-weight:700;cursor:pointer;font-size:13px;font-family:inherit';
+    actions.appendChild(cancelBtn);
+    actions.appendChild(okBtn);
+    box.appendChild(actions);
+    bg.appendChild(box);
+    document.body.appendChild(bg);
+    setTimeout(function(){ input.focus(); }, 30);
+
+    function cleanup(){
+      if (bg.parentNode) bg.parentNode.removeChild(bg);
+      document.removeEventListener('keydown', onKey, true);
+    }
+    function onKey(ev){
+      if (ev.key === 'Escape'){ ev.preventDefault(); ev.stopPropagation(); cleanup(); resolve(null); }
+      else if (ev.key === 'Enter'){ ev.preventDefault(); ev.stopPropagation(); var v = input.value; cleanup(); resolve(v || null); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    cancelBtn.addEventListener('click', function(){ cleanup(); resolve(null); });
+    okBtn.addEventListener('click', function(){ var v = input.value; cleanup(); resolve(v || null); });
+  });
+}
+
+async function enterRoom(){
   if(!selectedRoom){ alert('Seleccioná una sala primero.'); return; }
   if(!nickname){ openNickModal(); return; }
+
+  // [FIX CONTRASEÑA] Antes se intentaba entrar siempre sin contrasena y
+  // se esperaba que game.js detectara el rechazo y pidiera la
+  // contrasena reactivamente — ese camino dependia de que el evento de
+  // cierre de conexion tuviera exactamente la forma esperada, y si no
+  // pegaba, no se mostraba ningun prompt. Ahora la pedimos ACA, antes
+  // de entrar, si la sala figura como bloqueada en el listado.
+  var roomPassword = '';
+  if (selectedRoom.locked) {
+    var typed = await bcAskRoomPassword();
+    if (typed == null) return; // cancelo
+    roomPassword = typed;
+  }
+
   hideGameError();
   reloadInFlight = true;
 
@@ -4437,6 +4510,7 @@ function enterRoom(){
   const qs =
     '?roomId=' + encodeURIComponent(selectedRoom.id) +
     '&nick='   + encodeURIComponent(nickname) +
+    (roomPassword ? '&pass=' + encodeURIComponent(roomPassword) : '') +
     '&v='      + Date.now();
 
   gameRoomUrl = base + qs;

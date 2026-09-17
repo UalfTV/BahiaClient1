@@ -59,6 +59,24 @@ if (config.softwareRendering) {
   app.commandLine.appendSwitch('disable-gpu-sandbox')
   app.commandLine.appendSwitch('disable-accelerated-2d-canvas')
   app.commandLine.appendSwitch('disable-2d-canvas-clip-aa')
+} else {
+  // FIX FPS: nada de esto estaba seteado. Sin "disable-background-timer-throttling"
+  // en particular, Chromium le baja los timers a ~1Hz al proceso apenas pierde foco
+  // (alt-tab a Discord, por ejemplo) y el juego se traba unos segundos al volver.
+  app.commandLine.appendSwitch('ignore-gpu-blocklist')
+  app.commandLine.appendSwitch('enable-gpu-rasterization')
+  app.commandLine.appendSwitch('enable-zero-copy')
+  app.commandLine.appendSwitch('disable-background-timer-throttling')
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+  // [FIX FPS 2] En iGPUs Intel viejas (i3 de PC de gobierno) el vsync del
+  // compositor clava el juego a 60fps aunque el motor pinte más rápido, y a
+  // veces ANGLE elige un backend (D3D11) más lento que OpenGL puro sobre esas
+  // GPUs. Estos switches sacan ese techo. Si en algún equipo puntual se ve
+  // tearing o inestabilidad, son los primeros candidatos a sacar.
+  app.commandLine.appendSwitch('disable-frame-rate-limit')
+  app.commandLine.appendSwitch('disable-gpu-vsync')
+  app.commandLine.appendSwitch('use-angle', 'gl')
 }
 
 // [FIX] Una sola instancia: evita múltiples SSE + Discord RPC
@@ -224,12 +242,20 @@ function createWindow() {
     webPreferences.webSecurity = true
     webPreferences.allowRunningInsecureContent = false
     webPreferences.experimentalFeatures = false
+    webPreferences.experimentalFeatures = false
+    webPreferences.backgroundThrottling = false   // ← agregar esta línea
   })
 
   win.webContents.on('did-attach-webview', (event, wc) => {
     webviewContentsSet.add(wc)
     wc.on('destroyed', () => webviewContentsSet.delete(wc))
-    try { wc.setFrameRate(config.fpsLimit || 0) } catch (e) {}
+    // [FIX FPS 3] setFrameRate(0) no significa "sin límite" para Electron
+    // (exige fps > 0); si config.fpsLimit no está seteado, no tocamos nada
+    // y dejamos el refresh rate del compositor (que ahora ya no tiene el
+    // techo de vsync gracias a los switches de arriba).
+    if (config.fpsLimit && config.fpsLimit > 0) {
+      try { wc.setFrameRate(config.fpsLimit) } catch (e) {}
+    }
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {

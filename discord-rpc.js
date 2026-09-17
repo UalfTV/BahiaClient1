@@ -79,7 +79,7 @@ async function doConnect(clientId) {
 
   thisClient.on('ready', () => {
     if (!isCurrent()) {
-      try { thisClient.destroy() } catch (e) {}
+      safeDestroy(thisClient)
       return
     }
     ready = true
@@ -117,7 +117,7 @@ async function doConnect(clientId) {
     if (!isCurrent()) return
     console.warn('[discord-rpc] no se pudo conectar:', e.message)
     // Matar el cliente colgado (login puede seguir pending en background)
-    try { thisClient.destroy() } catch (_) {}
+    safeDestroy(thisClient)
     if (client === thisClient) client = null
     ready = false
     connectingClientId = null
@@ -135,10 +135,29 @@ async function doConnect(clientId) {
 function teardown() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   if (pendingActivityTimer) { clearTimeout(pendingActivityTimer); pendingActivityTimer = null }
-  try { client?.destroy() } catch (e) {}
+  safeDestroy(client)
   client = null
   ready = false
   connectingClientId = null
+}
+
+// [FIX] client.destroy() es ASYNC: internamente hace transport.close(),
+// que crea una Promise y adentro llama a transport.send() para mandar el
+// opcode de cierre. Si el login nunca llegó a abrir el socket (timeout,
+// Discord cerrado, etc.), ese socket es null y send() explota con
+// "Cannot read properties of null (reading 'write')" DENTRO del executor
+// de la Promise. Como nunca hacíamos await ni .catch() de destroy(), esa
+// rejection quedaba sin manejar → unhandledRejection en main.js.
+// Con try/catch sincrónico no alcanza porque el throw pasa por un
+// microtask; hay que atrapar la promesa que devuelve destroy().
+function safeDestroy(c) {
+  if (!c) return
+  try {
+    const p = c.destroy()
+    if (p && typeof p.catch === 'function') p.catch(() => {})
+  } catch (e) {
+    // destroy() tirando de forma sincrónica tampoco debería tumbar el proceso
+  }
 }
 
 // ============================================================

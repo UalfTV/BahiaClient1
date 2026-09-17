@@ -31,6 +31,30 @@ window.BCGameEvents = window.BCGameEvents || {
   var roomPass = getParam('pass') || null;
   var nick = getParam('nick') || 'Player';
 
+  // ============================================================
+  // Marca de cliente (checkmark de "usa BahiaClient")
+  // ------------------------------------------------------------
+  // Vamos dos caracteres invisibles (zero-width space + word joiner) pegados
+  // al final del nombre que mandamos a la sala. Viaja como parte del nombre
+  // real en el protocolo de Haxball, así que cualquiera en la sala —tenga
+  // BahiaClient o no— recibe ese nombre "con la marca puesta". Nosotros la
+  // detectamos y la mostramos como check; a un cliente vanilla simplemente
+  // no le hace nada raro (son caracteres invisibles, no rompen el nombre).
+  var BC_MARK = '\u200B\u2060';
+
+  function bcHasMark(name) {
+    return typeof name === 'string' && name.indexOf(BC_MARK) !== -1;
+  }
+  function bcCleanName(name) {
+    if (typeof name !== 'string') return name;
+    return name.split(BC_MARK).join('');
+  }
+  function bcBadgeHTML(name) {
+    return bcHasMark(name)
+      ? '<span class="bc-verified" title="Juega con BahiaClient">&#10003;</span>'
+      : '';
+  }
+
   var $scoreboard = document.getElementById('bc-scoreboard');
   var $scoreRed = document.getElementById('bc-score-red');
   var $scoreBlue = document.getElementById('bc-score-blue');
@@ -242,7 +266,7 @@ window.BCGameEvents = window.BCGameEvents || {
     };
   })();
 
-  function pushChat(nick, message, team, kind) {
+  function pushChat(nick, message, team, kind, verified) {
     var row = document.createElement('div');
     row.className = 'msg' + (kind ? ' ' + kind : '');
     if (kind === 'system' || kind === 'warn' || kind === 'news' || kind === 'join' || kind === 'leave') {
@@ -252,6 +276,13 @@ window.BCGameEvents = window.BCGameEvents || {
         var dot = document.createElement('span');
         dot.className = 'team-dot ' + team;
         row.appendChild(dot);
+      }
+      if (verified) {
+        var vb = document.createElement('span');
+        vb.className = 'bc-verified';
+        vb.title = 'Juega con BahiaClient';
+        vb.textContent = '\u2713';
+        row.appendChild(vb);
       }
       var ns = document.createElement('span');
       ns.className = 'nick' + (team === 'red' ? ' red' : team === 'blue' ? ' blue' : '');
@@ -477,13 +508,15 @@ window.BCGameEvents = window.BCGameEvents || {
   }
 
   function playerRowHTML(p, teamClass) {
-    var name = p.name || 'Player';
+    var rawName = p.name || 'Player';
+    var name = bcCleanName(rawName);
+    var badge = bcBadgeHTML(rawName);
     var ping = p.ping;
     var admin = isPlayerAdmin(p) ? '<span class="admin-mark">*</span>' : '';
     return (
       '<div class="bc-player-row ' + teamClass + '" data-player-id="' + p.id + '">' +
       '<span class="team-dot"></span>' +
-      '<span class="name">' + escapeHtml(name) + '</span>' + admin +
+      '<span class="name">' + escapeHtml(name) + '</span>' + badge + admin +
       '<span class="ping ' + pingClass(ping) + '">' + (typeof ping === 'number' ? ping : '') + '</span>' +
       '</div>'
     );
@@ -710,11 +743,13 @@ window.BCGameEvents = window.BCGameEvents || {
     if (bEl && bEl.textContent !== String(blueScore)) bEl.textContent = String(blueScore);
 
     // HaxBall: el cronómetro CUENTA HACIA ARRIBA desde 00:00 hasta timeLimit.
-    // gs.time viene en milisegundos transcurridos desde el kickoff.
-    // Si tu versión de node-haxball lo expone en ticks o segundos, ajustá
-    // el divisor (60 para ticks, 1 para segundos).
-    const elapsedMs = (typeof gs.time === 'number') ? gs.time : 0;
-    const totalSecs = Math.floor(elapsedMs / 1000);
+    // FIX: el campo real de la clase GameState de node-haxball es
+    // `timeElapsed`, NO `time` (ese campo no existe -> siempre undefined
+    // -> el reloj quedaba pegado en 00:00). Además ya viene en SEGUNDOS
+    // como float (se incrementa 1/60 por tick), no en milisegundos.
+    // Confirmado contra el mapeo de propiedades de la clase en api.js:
+    // ["ext","pauseGameTickCounter","timeElapsed","blueScore","redScore", ...]
+    const totalSecs = Math.floor((typeof gs.timeElapsed === 'number') ? gs.timeElapsed : 0);
 
     const mm = String(Math.floor(totalSecs / 60)).padStart(2, '0');
     const ss = String(totalSecs % 60).padStart(2, '0');
@@ -967,7 +1002,7 @@ window.BCGameEvents = window.BCGameEvents || {
   function doKickPlayer(id, isBan, isBanIP) {
     if (!currentRoom) return;
     var p = currentRoom.getPlayer ? currentRoom.getPlayer(id) : null;
-    var targetName = p && p.name ? p.name : '#' + id;
+    var targetName = p && p.name ? bcCleanName(p.name) : '#' + id;
     var verb = isBanIP ? 'Ban IP' : isBan ? 'Ban' : 'Kick';
     bcPrompt(verb + ' a ' + targetName, 'Razon (opcional). Dejalo vacio para aplicar sin razon.', {
       placeholder: 'Ej: spam, insultos, cheating...',
@@ -1205,7 +1240,7 @@ window.BCGameEvents = window.BCGameEvents || {
     if (typeof pid !== 'number' || isNaN(pid) || !currentRoom) return;
     if (pid === currentRoom.currentPlayerId) return;
     var p = currentRoom.getPlayer ? currentRoom.getPlayer(pid) : null;
-    var name = p && p.name ? p.name : '#' + pid;
+    var name = p && p.name ? bcCleanName(p.name) : '#' + pid;
     showCtxMenu(ev.clientX, ev.clientY, pid, name);
   });
 
@@ -1737,23 +1772,63 @@ window.BCGameEvents = window.BCGameEvents || {
   var handlers = {
     onPlayerJoin: function (p) {
       if (window.BCGameEvents) window.BCGameEvents.emit('playerJoin', { player: p });
-      pushChat(null, (p && p.name ? p.name : 'Alguien') + ' se conecto', null, 'join');
+      pushChat(null, (p && p.name ? bcCleanName(p.name) : 'Alguien') + ' se conecto', null, 'join');
       Sound.play('join');
       refreshAdminToolbar();
     },
-    onPlayerLeave: function (p) {
-      if (window.BCGameEvents) window.BCGameEvents.emit('playerLeave', { player: p });
-      pushChat(null, (p && p.name ? p.name : 'Alguien') + ' se desconecto', null, 'leave');
+    onPlayerLeave: function (p, reason, isBanned, byId) {
+      if (window.BCGameEvents) window.BCGameEvents.emit('playerLeave', { player: p, reason: reason, isBanned: isBanned, byId: byId });
+
+      var isMe = !!(currentRoom && p && p.id === currentRoom.currentPlayerId);
+      var byName = null;
+      try {
+        if (byId != null && currentRoom && currentRoom.getPlayer) {
+          var byP = currentRoom.getPlayer(byId);
+          if (byP && byP.name) byName = bcCleanName(byP.name);
+        }
+      } catch (e) {}
+
+      var wasKickedOrBanned = (byId != null) || isBanned;
+
+      if (isMe && wasKickedOrBanned) {
+        // FIX KICK/BAN: guardamos la razon real (la que escribio el admin)
+        // para que onClose la pueda mostrar en vez del mensaje generico.
+        window.__bcLastKickInfo = {
+          isBanned: !!isBanned,
+          reason: (typeof reason === 'string' && reason) ? reason : null,
+          byName: byName
+        };
+        var selfVerb = isBanned ? 'Te banearon de la sala' : 'Te expulsaron de la sala';
+        var selfExtra = (byName ? (' (' + byName + ')') : '') + (reason ? ': ' + reason : '');
+        setError(selfVerb, selfExtra || 'Sin motivo especificado.');
+        pushChat(null, selfVerb + selfExtra, null, 'warn');
+        Sound.play('leave');
+        refreshAdminToolbar();
+        return;
+      }
+
+      var name = (p && p.name) ? bcCleanName(p.name) : 'Alguien';
+      var line;
+      if (wasKickedOrBanned) {
+        var verb = isBanned ? 'fue baneado' : 'fue expulsado';
+        var extra = (byName ? ' por ' + byName : '') + (reason ? (': ' + reason) : '');
+        line = name + ' ' + verb + extra;
+      } else {
+        line = name + ' se desconecto';
+      }
+      pushChat(null, line, null, 'leave');
       Sound.play('leave');
       refreshAdminToolbar();
     },
     onPlayerChat: function (playerOrId, msg) {
       var p = typeof playerOrId === 'object' && playerOrId ? playerOrId
         : (currentRoom && currentRoom.getPlayer) ? currentRoom.getPlayer(playerOrId) : null;
-      var name = p && p.name ? p.name : (typeof playerOrId === 'number' ? '#' + playerOrId : '?');
+      var rawName = p && p.name ? p.name : (typeof playerOrId === 'number' ? '#' + playerOrId : '?');
+      var name = bcCleanName(rawName);
+      var verified = bcHasMark(rawName);
       var tid = getTeamId(p);
       var team = tid === 1 ? 'red' : tid === 2 ? 'blue' : 'spec';
-      pushChat(name, msg, team, null);
+      pushChat(name, msg, team, null, verified);
       Sound.play('chat');
     },
      onTeamGoal: function (team) {
@@ -1834,7 +1909,7 @@ window.BCGameEvents = window.BCGameEvents || {
 
     var joinConfig = {
       storage: {
-        player_name: nick,
+        player_name: nick + BC_MARK,
         avatar: null,
         geo: { lat: -38.7183, lon: -62.2661, flag: 'ar' }
       },
@@ -1866,6 +1941,17 @@ window.BCGameEvents = window.BCGameEvents || {
 
         rendererObj.targetFPS = 0; // FULL FPS: sin límite artificial
         rendererObj.resolutionScale = 1.0;
+        // [FIX FPS/CALIDAD] En Intel iGPUs viejas (i3 tipo PC de gobierno)
+        // WebGPU suele terminar corriendo por una capa de traducción (o
+        // directamente cae a software) y anda peor y más inestable que
+        // WebGL, que tiene drivers mucho más maduros ahí. Lo forzamos off.
+        rendererObj.webGPU = false;
+        // [FIX LINEAS] antialias=false + generalLineWidth/discLineWidth=1
+        // es lo que hacía que las líneas se vean "raras"/dentadas, sobre
+        // todo con resolutionScale bajo. forceFXAA es antialiasing barato
+        // (no MSAA), casi no pega en el fps, y grosor 2/3 ya se ve prolijo
+        // sin volver a los 3/4 originales que consumían más fill-rate.
+        rendererObj.antialias = true;
         rendererObj.showFPS = false;
         rendererObj.showInputLag = false;
         rendererObj.showNetGraph = false;
@@ -1877,8 +1963,8 @@ window.BCGameEvents = window.BCGameEvents || {
         rendererObj.showInvisibleSegments = false;
         rendererObj.squarePlayers = false;
         rendererObj.currentPlayerDistinction = true;
-        rendererObj.generalLineWidth = 1;
-        rendererObj.discLineWidth = 1;
+        rendererObj.generalLineWidth = 2;
+        rendererObj.discLineWidth = 3;
         rendererObj.followPlayerId = r.currentPlayerId;
         rendererObj.followMode = true;
         rendererObj.restrictCameraOrigin = true;
@@ -2033,29 +2119,84 @@ window.BCGameEvents = window.BCGameEvents || {
         // FIX #5: cortar el interval acá también
         try { if (window.__bcStateInterval) { clearInterval(window.__bcStateInterval); window.__bcStateInterval = null; } } catch(e){}
 
+        // [FIX KICK/PASSWORD] Antes esto leía reason.a1/reason.a2 a mano,
+        // que son nombres de propiedad minificados de UNA build puntual de
+        // node-haxball. Como el <script> carga @latest, cualquier update de
+        // la librería puede cambiar esos nombres y "code" queda undefined
+        // para SIEMPRE — que es exactamente lo que hacía que nunca se
+        // detecte ni el kick ni la sala con contraseña (siempre caía al
+        // mensaje genérico "La sala se cerro" sin ofrecer reintentar).
+        // Ahora sacamos el código de los ErrorCodes reales que expone la
+        // propia API (E.Errors.ErrorCodes), probamos varios nombres de
+        // propiedad conocidos, y si ninguno pega, hacemos fallback por
+        // texto (reason.toString() / el mensaje ya viene en inglés desde
+        // Errors.Language). Así no depende de una sola forma del objeto.
+        var EC = (E && E.Errors && E.Errors.ErrorCodes) || {};
+
+        // [DEBUG] si el problema de contrasena persiste, este log dice
+        // exactamente que forma tiene "reason" y que code detecta -
+        // mandamelo y lo afino con el dato real en vez de adivinar.
+        try { console.debug('[bc] onClose reason=', reason, 'typeof=', typeof reason); } catch(e){}
+
+        var code = null;
+        if (typeof reason === 'number') code = reason;
+        else if (reason) {
+          if (typeof reason.code === 'number') code = reason.code;
+          else if (typeof reason.errorCode === 'number') code = reason.errorCode;
+          else if (typeof reason.a1 === 'number') code = reason.a1;
+        }
+
+        var rawText = '';
+        try { rawText = String((reason && reason.toString) ? reason.toString() : (reason || '')); } catch (e) {}
+        var text = rawText.toLowerCase();
+
         // 👇 avisar al launcher que salimos
         try {
           if (window.bcIPC && window.bcIPC.notifyHost) {
-            window.bcIPC.notifyHost('bc-exit', {
-              code: reason && reason.a1,
-              msg:  reason && reason.a2,
-            });
+            window.bcIPC.notifyHost('bc-exit', { code: code, msg: rawText || null });
           }
         } catch(e){}
 
-        var code = reason && reason.a1;
-        var msgs = {
-          1: 'Se corto la conexion. Reintenta.',
-          3: 'La sala se cerro.',
-          4: 'La sala esta llena.',
-          5: 'Contrasena incorrecta.',
-          6: 'Estas baneado de esa sala.',
-          8: 'No se pudo conectar al host. La sala puede estar cerrada.',
-          12: 'Te expulsaron de la sala.'
-        };
-        var msg = msgs[code] || 'La sala se cerro';
-        if (code) msg += ' (codigo ' + code + ')';
-        if (code === 5) {
+        var msgs = {};
+        msgs[EC.ConnectionClosed != null ? EC.ConnectionClosed : 1] = 'Se corto la conexion. Reintenta.';
+        msgs[EC.RoomClosed        != null ? EC.RoomClosed        : 3]  = 'La sala se cerro.';
+        msgs[EC.RoomFull          != null ? EC.RoomFull          : 4]  = 'La sala esta llena.';
+        msgs[EC.WrongPassword     != null ? EC.WrongPassword     : 5]  = 'Contrasena incorrecta.';
+        msgs[EC.BannedBefore      != null ? EC.BannedBefore      : 6]  = 'Estas baneado de esa sala.';
+        msgs[EC.FailedHost        != null ? EC.FailedHost        : 8]  = 'No se pudo conectar al host. La sala puede estar cerrada.';
+        // "Kicked" no está confirmado en todas las versiones de ErrorCodes;
+        // el nombre real en la libreria vendorizada es KickedNow.
+        var KICKED_CODE = (EC.KickedNow != null) ? EC.KickedNow : 12;
+        msgs[KICKED_CODE] = 'Te expulsaron de la sala.';
+
+        // [FIX] Si onPlayerLeave ya nos dio el motivo real (lo que escribio
+        // el admin), lo priorizamos por sobre el mensaje generico de arriba.
+        var kickInfo = window.__bcLastKickInfo || null;
+
+        var isWrongPassword = code === (EC.WrongPassword != null ? EC.WrongPassword : 5)
+          || text.indexOf('wrong password') !== -1 || text.indexOf('contrase') !== -1;
+        var isKicked = code === KICKED_CODE
+          || text.indexOf('kick') !== -1 || text.indexOf('expuls') !== -1;
+        var isBanned = code === (EC.BannedBefore != null ? EC.BannedBefore : 6)
+          || text.indexOf('banned') !== -1 || text.indexOf('banead') !== -1;
+
+        var msg = (code != null && msgs[code]) ? msgs[code]
+          : isWrongPassword ? 'Contrasena incorrecta.'
+          : isKicked ? 'Te expulsaron de la sala.'
+          : isBanned ? 'Estas baneado de esa sala.'
+          : 'La sala se cerro' + (rawText ? ': ' + rawText : '');
+        if (code != null) msg += ' (codigo ' + code + ')';
+
+        // [FIX] Si tenemos el motivo real de onPlayerLeave, lo mostramos
+        // en vez del texto generico "Te expulsaron"/"Estas baneado".
+        if (kickInfo && (isKicked || isBanned || kickInfo.isBanned)) {
+          var verb = kickInfo.isBanned ? 'Te banearon de la sala' : 'Te expulsaron de la sala';
+          msg = verb + (kickInfo.byName ? ' (' + kickInfo.byName + ')' : '') +
+                (kickInfo.reason ? ': ' + kickInfo.reason : ': sin motivo especificado');
+          window.__bcLastKickInfo = null;
+        }
+
+        if (isWrongPassword) {
           bcPrompt('Sala con contrasena', 'Esta sala tiene contrasena. Ingresala para reconectar:', {
             placeholder: 'Contrasena', password: true, okLabel: 'Conectar', maxLength: 100
           }).then(function (p) {
