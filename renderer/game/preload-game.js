@@ -14,6 +14,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const HOST_CHANNELS = [
   'party-update',
   'perf-overlay',
+  'open-reskin',
 ];
 
 contextBridge.exposeInMainWorld('bcIPC', {

@@ -1,7 +1,7 @@
 'use strict';
 
 // ============================================================
-// BahiaClient — Customizer de reskin v3.8
+// BahiaClient — Customizer de reskin v3.11
 // - Pelota animada a 384px / 45ms
 // - _imgCache con LRU (max 12) — evita leak, no evicta en uso
 // - Pausa el rAF cuando la ventana está oculta
@@ -9,6 +9,24 @@
 // - v3.7: trail con glow aditivo + highlight + presets nuevos
 // - v3.8: hslToRgbNum normaliza hue/clamp, hookGoalSound retry,
 //         evict no rompe LRU, destroy() API, size clamp
+// - v3.9: hslToRgbNum sin allocación intermedia (menos GC).
+//         Ambient throttleado a N frames + cacheAsTexture.
+//         Counts base bajados (galaxy 300→120, matrix_rain 30→18).
+// - v3.10: customAudioCache usa URL completo como key (evita
+//          colisión de headers MP3). Loop se auto-pausa si hay
+//          demasiados errores seguidos (teardown). Reset de t0 al
+//          cambiar preset animado para arrancar en fase 0.
+// - v3.11: FIX bug "desaparece el render tras varias partidas".
+//          · ensureBallMask ahora chequea .destroyed del mask —
+//            antes, si stage2.destroy() lo mataba, la referencia
+//            quedaba viva y .clear() tiraba TypeError en el
+//            siguiente match. El error se acumulaba hasta pausar
+//            el loop entero del customizer.
+//          · tickBall resetea S.ballMask/ballMaskRadius cuando
+//            detecta que S.ballSprite fue destroyed, para que el
+//            próximo frame cree un mask fresco en vez de reusar
+//            el huérfano.
+//          · invalidateTextures refuerza el reset del mask.
 // ============================================================
 
 (function () {
@@ -27,6 +45,16 @@
   const BALL_ANIM_SIZE = 384;
   const BALL_ANIM_INTERVAL = 45;
   const MAX_IMG_CACHE = 12;
+
+  // FIX v3.9: throttlear el rebuild del ambient. La animación de
+  // partículas es lenta; refrescar cada 2 frames (30fps efectivos)
+  // es imperceptible pero corta el trabajo de CPU a la mitad.
+  const AMBIENT_REBUILD_INTERVAL = 2;
+
+  // FIX v3.10: después de N frames consecutivos de error (todos los
+  // subticks fallan), asumimos que el renderer está en teardown y
+  // pausamos el loop para no spamear la consola.
+  const MAX_CONSECUTIVE_ERRORS = 30;
 
   function deepMerge(base, override) {
     const out = Array.isArray(base) ? base.slice() : { ...base };
@@ -88,6 +116,7 @@
     ambientContainer: null,
     ambientGfx: null,
     ambientData: null,
+    ambientRTFrame: 0,
 
     prevKicking: new Map(),
     customAudioCache: new Map(),
@@ -98,9 +127,11 @@
     rainbowPhase: 0,
     t0: performance.now(),
 
-    // FIX: retry de hook de sonido
     _goalSoundTimer: null,
     _goalSoundTries: 0,
+
+    // FIX v3.10: contador de errores seguidos del tick loop.
+    _consecutiveErrors: 0,
   };
 
   // ============================================================
@@ -148,8 +179,6 @@
   }
 
   // FIX: si la entrada está en uso, la rotamos al final en vez de borrarla.
-  // Antes: delete + skip destroy → textura huérfana (leak).
-  // Ahora: la entrada en uso se mueve al final de la LRU y no se toca.
   function _evictImgCache() {
     const maxAttempts = _imgCache.size * 2 + 4;
     let attempts = 0;
@@ -160,7 +189,6 @@
       const entry = _imgCache.get(firstKey);
 
       if (entry && entry.tex && _isTextureInUse(entry.tex)) {
-        // Rotar al final (más reciente) y seguir con el siguiente
         _imgCache.delete(firstKey);
         _imgCache.set(firstKey, entry);
         continue;
@@ -245,10 +273,16 @@
     return arr && arr[0] ? arr[0] : null;
   }
 
+  // FIX v3.10: key del cache usa el URL COMPLETO. Antes se usaba
+  // `cfg.custom.slice(0, 40)`, y esos primeros 40 chars de un data URL
+  // son casi siempre "data:audio/mpeg;base64," + el mismo header del
+  // encoder. Dos MP3s distintos podían colisionar y uno reemplazaba al
+  // otro. El cache es chico (2 slots: kick/goal), el URL largo como
+  // key no es problema de memoria.
   function playSound(kind) {
     const cfg = S.config.sounds[kind];
     if (cfg.mode === 'custom' && cfg.custom) {
-      const key = kind + ':' + cfg.custom.slice(0, 40);
+      const key = kind + ':' + cfg.custom;
       let audio = S.customAudioCache.get(key);
       if (!audio) {
         audio = new Audio(cfg.custom);
@@ -281,17 +315,44 @@
     return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
   }
 
-  // FIX: normaliza hue (acepta negativos y fuera de 360) y clampa RGB a [0,255]
-  // Antes: con h<0 se generaban r/g/b > 255 → overflow en <<16 → canales cruzados.
+  // FIX v3.9: versión sin allocación. Antes llamaba a `hslToRgb` que
+  // devolvía un array [r,g,b] — eso generaba un GC allocation por
+  // cada partícula por cada frame. En `galaxy` (300 items) y
+  // `nebula` (60 llamadas), eran decenas de miles de allocs/seg
+  // generando micro-stutters. Ahora se calcula inline sin array.
   function hslToRgbNum(h, s, l) {
-    const hn = ((h % 360) + 360) % 360;
+    const hn = (((h % 360) + 360) % 360) / 360;
     const sn = Math.max(0, Math.min(1, s));
     const ln = Math.max(0, Math.min(1, l));
-    const c = hslToRgb(hn / 360, sn, ln);
-    const r = Math.max(0, Math.min(255, c[0]));
-    const g = Math.max(0, Math.min(255, c[1]));
-    const b = Math.max(0, Math.min(255, c[2]));
-    return (r << 16) + (g << 8) + b;
+    let r, g, b;
+    if (sn === 0) {
+      r = g = b = ln;
+    } else {
+      const q = ln < 0.5 ? ln * (1 + sn) : ln + sn - ln * sn;
+      const p = 2 * ln - q;
+      let t;
+      t = hn + 1 / 3;
+      if (t < 0) t += 1; else if (t > 1) t -= 1;
+      if (t < 1 / 6) r = p + (q - p) * 6 * t;
+      else if (t < 1 / 2) r = q;
+      else if (t < 2 / 3) r = p + (q - p) * (2 / 3 - t) * 6;
+      else r = p;
+      t = hn;
+      if (t < 1 / 6) g = p + (q - p) * 6 * t;
+      else if (t < 1 / 2) g = q;
+      else if (t < 2 / 3) g = p + (q - p) * (2 / 3 - t) * 6;
+      else g = p;
+      t = hn - 1 / 3;
+      if (t < 0) t += 1; else if (t > 1) t -= 1;
+      if (t < 1 / 6) b = p + (q - p) * 6 * t;
+      else if (t < 1 / 2) b = q;
+      else if (t < 2 / 3) b = p + (q - p) * (2 / 3 - t) * 6;
+      else b = p;
+    }
+    const ri = Math.max(0, Math.min(255, (r * 255 + 0.5) | 0));
+    const gi = Math.max(0, Math.min(255, (g * 255 + 0.5) | 0));
+    const bi = Math.max(0, Math.min(255, (b * 255 + 0.5) | 0));
+    return (ri << 16) | (gi << 8) | bi;
   }
 
   // ============================================================
@@ -358,6 +419,17 @@
     return S.ballTexture;
   }
 
+  // FIX v3.11 (bug "desaparece el render tras varias partidas"):
+  // Antes esta función sólo chequeaba `!S.ballMask` (null/undefined),
+  // no `.destroyed`. Cuando onGameStop hacía stage2.destroy({children:true}),
+  // el mask quedaba destroyeado en la GPU pero la referencia JS seguía
+  // viva. En el siguiente match, ensureBallMask lo veía truthy, NO lo
+  // recreaba, y `.clear()` sobre un Graphics destroyed tiraba TypeError.
+  // Ese error subía al try/catch de tick() y a los 30 seguidos se
+  // pausaba el loop del customizer entero.
+  //
+  // Ahora chequeamos `.destroyed` y, si es así, recreamos el mask como
+  // si fuera la primera vez (ballMaskRadius = -1 fuerza el redibujado).
   function ensureBallMask(tex) {
     const PIXI = getPIXI();
     if (!PIXI || !tex) return;
@@ -365,7 +437,7 @@
     const texW = (tex.width) || (tex.source && tex.source.width) || 512;
     const maskRadius = texW / 2;
 
-    if (!S.ballMask) {
+    if (!S.ballMask || S.ballMask.destroyed) {
       S.ballMask = new PIXI.Graphics();
       S.ballMaskRadius = -1;
     }
@@ -384,7 +456,7 @@
     const tex = resolveBallTexture();
 
     if (!tex) {
-      if (S.ballSprite) S.ballSprite.visible = false;
+      if (S.ballSprite && !S.ballSprite.destroyed) S.ballSprite.visible = false;
       discInfo.gr.visible = true;
       return;
     }
@@ -395,11 +467,24 @@
     const PIXI = getPIXI();
     if (!PIXI) return;
 
-    if (!S.ballSprite || S.ballSprite.destroyed) {
+    // FIX v3.11: al recrear el sprite (porque el anterior fue destroyed
+    // por el destroy del stage2 en onGameStop), también reseteamos el
+    // mask. Sin esto, S.ballMask seguía apuntando a un Graphics
+    // huérfano del match anterior y el chequeo de ensureBallMask
+    // pasaba de largo (porque `!S.ballMask` es false si el objeto
+    // existe, aunque esté destroyed).
+    if (S.ballSprite && S.ballSprite.destroyed) {
+      S.ballSprite = null;
+      S.ballMask = null;
+      S.ballMaskRadius = -1;
+    }
+
+    if (!S.ballSprite) {
       S.ballSprite = new PIXI.Sprite(tex);
       S.ballSprite.anchor.set(0.5);
       try { tex.source.scaleMode = 'linear'; } catch (e) {}
       try { stage2.addChild(S.ballSprite); } catch (e) {}
+      // El mask va a ser creado por ensureBallMask más abajo.
     } else if (S.ballSprite.texture !== tex) {
       S.ballSprite.texture = tex;
       try { tex.source.scaleMode = 'linear'; } catch (e) {}
@@ -424,7 +509,6 @@
     S.ballSprite.visible = true;
     S.ballSprite.x = discInfo.gr.x;
     S.ballSprite.y = discInfo.gr.y;
-    // FIX: clamp del size para evitar negativo o cero
     const sizeMul = Math.max(0.1, S.config.ball.size || 1);
     const size = radius * 2 * sizeMul;
     S.ballSprite.width = size;
@@ -457,7 +541,6 @@
     const PIXI = getPIXI();
     if (!PIXI) return;
 
-    // Asegurar Graphics
     if (!S.trailGlow || S.trailGlow.destroyed) {
       S.trailGlow = new PIXI.Graphics();
       try { S.trailGlow.blendMode = 'add'; } catch(e){}
@@ -470,7 +553,6 @@
     if (S.trailGlow.parent !== stage2)     { try { stage2.addChild(S.trailGlow); }     catch(e){} }
     if (S.trailGraphics.parent !== stage2) { try { stage2.addChild(S.trailGraphics); } catch(e){} }
 
-    // Push punto
     const px = discInfo.gr.x;
     const py = discInfo.gr.y;
 
@@ -490,7 +572,6 @@
       return;
     }
 
-    // Paleta
     const preset    = trail.preset || 'cyan';
     const isRainbow = preset === 'rainbow';
     const isFire    = preset === 'fire';
@@ -537,7 +618,6 @@
     const pts = S.trailPoints;
     const n = pts.length;
 
-    // Capa glow
     const glow = S.trailGlow;
     glow.clear();
     for (let i = 1; i < n; i++) {
@@ -549,7 +629,6 @@
       glow.stroke({ color: glowColor, width: w, alpha, cap: 'round', join: 'round' });
     }
 
-    // Capa core
     const g = S.trailGraphics;
     g.clear();
 
@@ -562,7 +641,6 @@
       g.stroke({ color: coreColor, width: w, alpha, cap: 'round', join: 'round' });
     }
 
-    // Highlight blanco (excepto void)
     if (!isVoid) {
       for (let i = 1; i < n; i++) {
         const t = i / (n - 1);
@@ -600,11 +678,6 @@
   function syncDrawBackgroundFlag() {
     if (!S.rendererObj) return;
     const wantsCustomBg = S.config.bg.mode !== 'none';
-    // El ambient NO debe apagar el fondo del campo. El ambient se dibuja
-    // en stage[0], detrás de stage2 (donde vive el césped del renderer),
-    // así que con el fondo visible el ambient solo se ve AFUERA de la
-    // cancha. Solo el bg custom (que sí reemplaza el césped) apaga el
-    // fondo del renderer.
     const desired = !wantsCustomBg;
     if (S.bgFlagApplied !== desired) {
       if (S.hooks && S.hooks.setDrawBackground) {
@@ -620,7 +693,7 @@
     const tex = resolveBgTexture();
 
     if (!tex) {
-      if (S.bgSprite) S.bgSprite.visible = false;
+      if (S.bgSprite && !S.bgSprite.destroyed) S.bgSprite.visible = false;
       return;
     }
 
@@ -642,7 +715,6 @@
       S.bgSprite = new PIXI.Sprite(tex);
       S.bgSprite.anchor.set(0.5);
       try { stage2.addChildAt(S.bgSprite, 0); } catch (e) { return; }
-      // FIX: sortableChildren se setea UNA vez al crear el sprite, no cada frame
       try { stage2.sortableChildren = false; } catch(e){}
       S.bgSortableSet = true;
     } else if (S.bgSprite.texture !== tex) {
@@ -667,11 +739,13 @@
   // ============================================================
 
   function ambientInitData(kind) {
+    // FIX v3.9: counts bajados. galaxy 300→120, matrix_rain 30→18,
+    // nebula 6→4, deepspace 200→120, stars 120→90.
     const counts = {
-      stars: 120, particles: 60, rain: 100, void: 5,
-      nebula: 6, galaxy: 300, deepspace: 200, warp: 150,
-      fireflies: 40, snowfall: 80, ember: 60, bubbles: 50,
-      shooting: 12, matrix_rain: 30,
+      stars: 90, particles: 50, rain: 80, void: 5,
+      nebula: 4, galaxy: 120, deepspace: 120, warp: 100,
+      fireflies: 30, snowfall: 60, ember: 40, bubbles: 40,
+      shooting: 8, matrix_rain: 18,
     };
     const N = counts[kind] || 0;
     const data = { kind, items: [] };
@@ -757,6 +831,7 @@
       S.ambientContainer = new PIXI.Container();
       S.ambientGfx = new PIXI.Graphics();
       S.ambientContainer.addChild(S.ambientGfx);
+      S.ambientRTFrame = 0;
       try { stage.addChildAt(S.ambientContainer, 0); } catch (e) {
         try { stage.addChild(S.ambientContainer); } catch (e2) { return null; }
       }
@@ -772,7 +847,7 @@
     const active = amb.mode !== 'none';
 
     if (!active) {
-      if (S.ambientContainer) S.ambientContainer.visible = false;
+      if (S.ambientContainer && !S.ambientContainer.destroyed) S.ambientContainer.visible = false;
       return;
     }
 
@@ -791,10 +866,18 @@
 
     if (!S.ambientData || S.ambientData.kind !== amb.preset) {
       S.ambientData = ambientInitData(amb.preset);
+      S.ambientRTFrame = AMBIENT_REBUILD_INTERVAL;
     }
 
+    // FIX v3.9: throttle del rebuild. Refrescar la geometría cada 2
+    // frames corta a la mitad el trabajo de CPU del ambient sin que
+    // se note (partículas lentas, movimiento casi continuo).
+    S.ambientRTFrame = (S.ambientRTFrame || 0) + 1;
+    if (S.ambientRTFrame < AMBIENT_REBUILD_INTERVAL) return;
+    S.ambientRTFrame = 0;
+
     const g = S.ambientGfx;
-    if (!g) return;
+    if (!g || g.destroyed) return;
     g.clear();
 
     const intensity = Math.max(0.2, Math.min(2, amb.intensity || 1));
@@ -1073,6 +1156,29 @@
         }
       }
     }
+
+    // FIX v3.9: cachear el ambient a una RenderTexture. Con esto PIXI
+    // deja de re-validar el árbol de Graphics cada frame — el ambient
+    // pasa a ser un solo draw call de sprite. La textura se refresca
+    // solo en los frames donde reconstruimos la geometría (arriba).
+    //
+    // Nota: para kinds con muchas primitivas (galaxy/nebula/etc) el
+    // cache + updateCacheTexture() cada 2 frames sigue siendo más
+    // barato que N draw calls por frame, especialmente en iGPU.
+    // Para kinds con pocas primitivas podría ser contraproducente,
+    // pero el throttle a 2 frames ya lo mantiene acotado.
+    try {
+      if (typeof container.cacheAsTexture === 'function') {
+        if (!container.isCachedAsTexture) {
+          container.cacheAsTexture({ resolution: 1, antialias: false });
+        } else {
+          container.updateCacheTexture();
+        }
+      }
+    } catch (e) {
+      // cacheAsTexture no está disponible en versiones muy viejas de
+      // PIXI v8; el throttle a 2 frames ya aporta la mitad del ahorro.
+    }
   }
 
   // ============================================================
@@ -1098,15 +1204,11 @@
     }
   }
 
-  // FIX: retry si __bcSoundPlay no existe todavía.
-  // Antes: solo intentaba UNA vez desde attach(); si el renderer definía
-  // __bcSoundPlay después, el hook nunca se aplicaba.
   function hookGoalSound() {
     if (window.__bcSoundHooked) return;
 
     const orig = window.__bcSoundPlay;
     if (typeof orig !== 'function') {
-      // Reintentar con backoff hasta agotar (10s)
       if (S._goalSoundTries < 20) {
         S._goalSoundTries++;
         clearTimeout(S._goalSoundTimer);
@@ -1156,6 +1258,23 @@
 
   let _lastTime = performance.now();
 
+  // FIX v3.10: la lógica del tick se movió a _tickInner() para poder
+  // envolver TODO el frame en un único try/catch. Antes cada subtick
+  // (ball/trail/bg/ambient/kick) tenía su propio try/catch que
+  // logueaba un warning por frame en teardown → consola sucia.
+  function _tickInner() {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - _lastTime) / 1000);
+    _lastTime = now;
+
+    syncDrawBackgroundFlag();
+    tickBall();
+    tickTrail();
+    tickBg();
+    tickAmbient(dt);
+    tickKick();
+  }
+
   function tick() {
     if (S.paused) {
       S.raf = null;
@@ -1164,16 +1283,21 @@
     S.raf = requestAnimationFrame(tick);
     if (!S.attached) return;
 
-    const now = performance.now();
-    const dt = Math.min(0.1, (now - _lastTime) / 1000);
-    _lastTime = now;
-
-    syncDrawBackgroundFlag();
-    try { tickBall(); }      catch (e) { console.warn('[customizer] ball:', e.message); }
-    try { tickTrail(); }     catch (e) { console.warn('[customizer] trail:', e.message); }
-    try { tickBg(); }        catch (e) { console.warn('[customizer] bg:', e.message); }
-    try { tickAmbient(dt); } catch (e) { console.warn('[customizer] ambient:', e.message); }
-    try { tickKick(); }      catch (e) { console.warn('[customizer] kick:', e.message); }
+    try {
+      _tickInner();
+      S._consecutiveErrors = 0;
+    } catch (e) {
+      S._consecutiveErrors++;
+      // Solo logueamos cada error como warn hasta el umbral, para no
+      // llenar la consola si el renderer está en teardown.
+      if (S._consecutiveErrors <= 3) {
+        console.warn('[customizer] tick error:', e && e.message);
+      }
+      if (S._consecutiveErrors > MAX_CONSECUTIVE_ERRORS) {
+        console.warn('[customizer] demasiados errores seguidos, pausando loop');
+        S.paused = true;
+      }
+    }
   }
 
   document.addEventListener('visibilitychange', () => {
@@ -1204,18 +1328,34 @@
     S.ballAnimCtx = null;
     S.ballAnimLastFrame = -1;
 
-    if (S.ballSprite) { try { S.ballSprite.destroy(); } catch (e) {} S.ballSprite = null; }
+    if (S.ballSprite) {
+      try { S.ballSprite.mask = null; } catch (e) {}
+      try { S.ballSprite.destroy(); } catch (e) {}
+      S.ballSprite = null;
+    }
+    // FIX v3.11: al destruir el sprite, también liberamos la referencia
+    // al mask. Sin esto, si el mask quedaba destroyed por el destroy
+    // del stage2 (no por esta función), la referencia seguía viva y
+    // ensureBallMask no lo recreaba.
     if (S.ballMask)   { try { S.ballMask.destroy(); }   catch (e) {} S.ballMask = null; }
     S.ballMaskRadius = -1;
-    if (S.bgSprite)   { try { S.bgSprite.destroy(); }   catch (e) {} S.bgSprite = null; }
+    if (S.bgSprite)   { try { S.bgSprite.mask = null; } catch (e) {} try { S.bgSprite.destroy(); } catch (e) {} S.bgSprite = null; }
 
     S.trailPoints.length = 0;
     if (S.trailGraphics) { try { S.trailGraphics.clear(); } catch (e) {} }
     if (S.trailGlow)     { try { S.trailGlow.clear(); }     catch (e) {} }
 
-    if (S.ambientData) S.ambientData = null;
-    if (S.ambientGfx) { try { S.ambientGfx.clear(); } catch (e) {} }
-    if (S.ambientContainer) { try { S.ambientContainer.visible = false; } catch (e) {} }
+    // FIX v3.9: al invalidar, hay que destruir el container del ambient
+    // (que ahora puede tener su RenderTexture cacheada) para liberar
+    // la GPU memory.
+    if (S.ambientContainer) {
+      try { S.ambientContainer.visible = false; } catch (e) {}
+      try { S.ambientContainer.destroy({ children: true }); } catch (e) {}
+      S.ambientContainer = null;
+    }
+    S.ambientGfx = null;
+    S.ambientData = null;
+    S.ambientRTFrame = 0;
   }
 
   function applyAll() {
@@ -1228,28 +1368,26 @@
     }
   }
 
-  // FIX: teardown total expuesto como API
   function destroy() {
     try {
       if (S.raf) cancelAnimationFrame(S.raf);
       S.raf = null;
       S.attached = false;
 
-      // Cancelar reintento de hook de sonido
       clearTimeout(S._goalSoundTimer);
       S._goalSoundTimer = null;
       S._goalSoundTries = 0;
 
-      // Destruir sprites y graphics
-      if (S.ballSprite)   { try { S.ballSprite.destroy(); }   catch (e) {} S.ballSprite = null; }
+      if (S.ballSprite)   { try { S.ballSprite.mask = null; } catch (e) {} try { S.ballSprite.destroy(); }   catch (e) {} S.ballSprite = null; }
       if (S.ballMask)     { try { S.ballMask.destroy(); }     catch (e) {} S.ballMask = null; }
-      if (S.bgSprite)     { try { S.bgSprite.destroy(); }     catch (e) {} S.bgSprite = null; }
+      if (S.bgSprite)     { try { S.bgSprite.mask = null; } catch (e) {} try { S.bgSprite.destroy(); }     catch (e) {} S.bgSprite = null; }
       if (S.trailGlow)    { try { S.trailGlow.destroy(); }    catch (e) {} S.trailGlow = null; }
       if (S.trailGraphics){ try { S.trailGraphics.destroy(); }catch (e) {} S.trailGraphics = null; }
       if (S.ambientContainer) { try { S.ambientContainer.destroy({children: true}); } catch (e) {} S.ambientContainer = null; }
       S.ambientGfx = null;
+      S.ambientData = null;
+      S.ambientRTFrame = 0;
 
-      // Texturas
       if (S.ballTexture && !_isTextureInCache(S.ballTexture)) { try { S.ballTexture.destroy(true); } catch(e){} }
       if (S.bgTexture && !_isTextureInCache(S.bgTexture)) { try { S.bgTexture.destroy(true); } catch(e){} }
       if (S.ballAnimTexture) { try { S.ballAnimTexture.destroy(true); } catch(e){} }
@@ -1264,7 +1402,6 @@
       S.trailPoints.length = 0;
       S.prevKicking.clear();
 
-      // Restaurar drawBackground
       if (S.rendererObj) {
         try { S.rendererObj.drawBackground = true; } catch(e){}
       }
@@ -1281,6 +1418,24 @@
   const api = {
     setSection(section, patch) {
       if (!S.config[section]) return false;
+
+      // FIX v3.10: si estamos cambiando el preset o el modo de la
+      // pelota a/desde un preset animado, reseteamos t0 para que la
+      // animación arranque en fase 0 (antes arrancaba en una fase
+      // aleatoria basada en cuándo se cargó el módulo).
+      if (section === 'ball') {
+        const oldPreset = S.config.ball && S.config.ball.preset;
+        const oldMode = S.config.ball && S.config.ball.mode;
+        const newPreset = patch.preset !== undefined ? patch.preset : oldPreset;
+        const newMode = patch.mode !== undefined ? patch.mode : oldMode;
+        const oldAnimated = oldMode === 'preset' && oldPreset &&
+          window.BCReskinPresets?.getBallPreset(oldPreset)?.animated;
+        const newAnimated = newMode === 'preset' && newPreset &&
+          window.BCReskinPresets?.getBallPreset(newPreset)?.animated;
+        if (newAnimated && !oldAnimated) S.t0 = performance.now();
+        if (newAnimated && oldAnimated && newPreset !== oldPreset) S.t0 = performance.now();
+      }
+
       S.config[section] = { ...S.config[section], ...patch };
       applyAll();
       return true;
@@ -1333,5 +1488,5 @@
   }
   waitForRenderer();
 
-  console.log('[customizer] v3.8 cargado (trail + hue fix + goal retry + destroy API)');
+  console.log('[customizer] v3.11 cargado (fix ballMask destroyed + sprite reset)');
 })();

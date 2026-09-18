@@ -74,6 +74,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getClientId:   () => ipcRenderer.invoke('get-client-id'),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
 
+  // [FIX FPS v0.2.8] Hz reales del monitor donde está la ventana, para
+  // que el juego pueda targetear ese refresh en vez de un 144 fijo.
+  getDisplayHz: () => ipcRenderer.invoke('get-display-hz'),
+
   // Listener persistente: si el renderer se suscribe después de que
   // main emitió el evento, no lo pierde porque main lo puede re-emitir.
   onAppVersion: (callback) => onAppVersion(callback),

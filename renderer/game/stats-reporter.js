@@ -5,9 +5,29 @@
 // Detecta goles, scorer, asistencias y postea al backend.
 // Corre dentro del webview del juego.
 //
-// v10 — fixes de duplicación de kicks + limpieza de pendingGoals.
+// v11 — matches huérfanos si /match/end falla:
+//   · El POST a /match/end ahora se reintenta con backoff
+//     exponencial (1.5s → 3s → 6s → 12s → 24s, máx 6 intentos).
+//     Antes, si el POST fallaba (backend caído, red flaky), el
+//     match quedaba abierto para siempre en el backend y nadie
+//     lo cerraba. Esto producía matches huérfanos que se
+//     acumulaban.
+//   · Cada match pendiente tiene su propio contador y timer
+//     (pendingEnds Map keyed por matchId) — si varios matches
+//     consecutivos fallan, todos se retoman cuando el backend
+//     vuelve, no solo el último.
+//   · beforeunload/pagehide: send final con keepalive:true para
+//     que el último intento sobreviva al cierre del webview.
+//   · onGameStop: ahora también cierra el match con el score
+//     actual. Antes solo reseteaba el estado local y el match
+//     quedaba abierto en el backend hasta que algún sweeper lo
+//     limpiara.
+//   · post(): ahora devuelve { ok: true } cuando el server
+//     responde 2xx con body vacío, en vez de null. Antes era
+//     ambiguo con "falló" y rompía el retry.
 //
-// v9 — ventanas ampliadas + warn detallado.
+// v10 — fixes de duplicación de kicks + limpieza de pendingGoals.
+// v9  — ventanas ampliadas + warn detallado.
 //
 // BUG 1 (fixed en v8): teamId se guardaba como 0 cuando
 // node-haxball devuelve player.team como NÚMERO plano (1 o 2) en
@@ -60,6 +80,11 @@
   const JOIN_MIDGAME_MAX_WAIT_MS = 20000;
   const JOIN_MIDGAME_POLL_MS = 500;
 
+  // FIX #301a: parámetros del retry del /match/end.
+  const END_MAX_ATTEMPTS   = 6;
+  const END_BASE_DELAY_MS  = 1500;
+  const END_MAX_DELAY_MS   = 30000;
+
   const kickHistory = [];
   const pendingGoals = [];
   let matchId = null;
@@ -70,11 +95,17 @@
   let armed = false;
   let joinMidGameTimer = null;
   let midGameArmed = false;
+  let midGameChecked = false;
 
-  // FIX BUG 4: estado por jugador del último isKicking que ya
-  // registramos. El polling solo graba transiciones false→true,
-  // nunca estado sostenido. __bcOnKick también lo actualiza para
-  // no grabar la misma transición dos veces.
+  // FIX #301a: cola de /match/end pendientes, keyed por matchId.
+  // Cada entrada tiene { payload, attempts, timer }. Un timer por
+  // match evita que el retry de un match viejo bloquee al siguiente.
+  const pendingEnds = new Map();
+
+  // FIX #301b: flag para no mandar dos veces el keepalive cuando
+  // beforeunload y pagehide disparan seguidos.
+  let _keepaliveSent = false;
+
   const discWasKicking = new Map();
 
   function log(...a)  { try { console.log('[stats]', ...a); } catch(e){} }
@@ -86,6 +117,11 @@
     return { url: String(b.url).replace(/\/+$/, ''), key: b.key || '' };
   }
 
+  // FIX #301d: si el server responde 2xx con body vacío, devolvemos
+  // { ok: true } en vez de null. Antes null significaba "falló" para
+  // el caller, y la ambigüedad rompía el retry del /match/end
+  // (podía estar OK pero lo tratábamos como fallo y reintentábamos
+  // para siempre).
   async function post(path, body) {
     const be = getBackend();
     if (!be) { warn('backend no configurado, skip', path); return null; }
@@ -101,12 +137,105 @@
       let data = null;
       try { data = await res.json(); } catch(e){}
       if (!res.ok) { warn('POST', path, res.status, data); return null; }
-      return data;
+      return data != null ? data : { ok: true };
     } catch (e) {
       warn('POST error', path, e.message);
       return null;
     }
   }
+
+  // ============================================================
+  // FIX #301a — retry con backoff para /match/end
+  // ------------------------------------------------------------
+  // Antes: onGameEnd hacía `post('/match/end', body).then(...)` sin
+  // chequeo. Si fallaba, matchId se nuleaba igual y el match quedaba
+  // abierto en el backend para siempre.
+  //
+  // Ahora: encolamos el payload y reintentamos con backoff
+  // exponencial hasta END_MAX_ATTEMPTS. Cada matchId tiene su
+  // propio timer, así no se pisan entre sí.
+  // ============================================================
+
+  function enqueueMatchEnd(payload) {
+    if (!payload || !payload.matchId) return;
+    if (pendingEnds.has(payload.matchId)) return;
+    pendingEnds.set(payload.matchId, {
+      payload,
+      attempts: 0,
+      timer: null,
+    });
+    attemptPendingEnd(payload.matchId);
+  }
+
+  async function attemptPendingEnd(mid) {
+    const item = pendingEnds.get(mid);
+    if (!item) return;
+
+    item.timer = null;
+    item.attempts++;
+
+    // Si ya superamos el límite, abandonar. Logueamos el payload
+    // para que quede registro en el log del webview (el user puede
+    // reportarlo).
+    if (item.attempts > END_MAX_ATTEMPTS) {
+      warn('match/end abandonado tras', END_MAX_ATTEMPTS, 'intentos:', {
+        matchId: mid,
+        payload: item.payload,
+      });
+      pendingEnds.delete(mid);
+      return;
+    }
+
+    const res = await post('/match/end', item.payload);
+    if (res) {
+      log('match/end OK:', mid, 'intentos:', item.attempts);
+      pendingEnds.delete(mid);
+      return;
+    }
+
+    // Backoff exponencial capeado a END_MAX_DELAY_MS.
+    const delay = Math.min(
+      END_MAX_DELAY_MS,
+      END_BASE_DELAY_MS * Math.pow(2, item.attempts - 1)
+    );
+    log('match/end falló, retry en', Math.round(delay / 1000) + 's',
+        '(intento', item.attempts + '/' + END_MAX_ATTEMPTS + ')');
+    item.timer = setTimeout(() => attemptPendingEnd(mid), delay);
+  }
+
+  // FIX #301b: último intento con keepalive cuando el webview se
+  // está cerrando. fetch normal es cancelado por Chromium durante
+  // el teardown; keepalive:true sobrevive al unload (payload
+  // < 64 KB, el nuestro es ~200 bytes).
+  function flushPendingEndsKeepalive() {
+    if (_keepaliveSent) return;
+    _keepaliveSent = true;
+    if (pendingEnds.size === 0) return;
+    const be = getBackend();
+    if (!be) return;
+    for (const [mid, item] of pendingEnds) {
+      try {
+        fetch(be.url + '/match/end', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-bc-key': be.key,
+          },
+          body: JSON.stringify(item.payload),
+          keepalive: true,
+        }).catch(() => {});
+      } catch (e) {
+        // Durante teardown fetch puede tirar synchronously; ignorar.
+      }
+    }
+  }
+
+  window.addEventListener('beforeunload', flushPendingEndsKeepalive);
+  window.addEventListener('pagehide', flushPendingEndsKeepalive);
+
+  // ============================================================
+  // Resto del archivo (lógica de kicks y goles)
+  // ============================================================
 
   function getRoom() {
     return window.__bcRoom || null;
@@ -131,15 +260,6 @@
     return entry && entry.playerId ? entry.playerId : null;
   }
 
-  // ============================================================
-  // teamId robusto
-  // ------------------------------------------------------------
-  // node-haxball expone player.team de varias formas según el
-  // contexto:
-  //   - un número (1 o 2)           → teamId directo
-  //   - un objeto { id: 1|2, ... }  → teamId = team.id
-  //   - undefined / null            → 0 (desconocido)
-  // ============================================================
   function teamIdOf(playerOrTeam) {
     if (playerOrTeam == null) return 0;
     if (typeof playerOrTeam === 'number') return playerOrTeam;
@@ -150,15 +270,9 @@
     return 0;
   }
 
-  // ============================================================
-  // HOOK DIRECTO — el renderer llama acá cuando un jugador
-  // empieza a patear (transición false → true de isKicking).
-  // ============================================================
   window.__bcOnKick = function(haxballId, nick) {
     if (typeof haxballId !== 'number' || !nick) return;
 
-    // FIX BUG 4: marcamos la transición acá para que recordKicks
-    // no la vuelva a grabar en el próximo poll.
     discWasKicking.set(haxballId, true);
 
     const pid = playerIdForNick(nick);
@@ -167,9 +281,6 @@
     const room = getRoom();
     let player = room && room.getPlayer ? room.getPlayer(haxballId) : null;
 
-    // Fallback: algunos frames de node-haxball devuelven null para
-    // getPlayer(id) justo cuando isKicking transiciona. Buscamos
-    // directo en room.players.
     if (!player && room && Array.isArray(room.players)) {
       player = room.players.find(p => p && p.id === haxballId) || null;
     }
@@ -203,7 +314,6 @@
     if (kickHistory.length > KICK_HISTORY_SIZE) kickHistory.shift();
   };
 
-  // ─── Fallback por polling ────────────────────────────────────
   function recordKicks() {
     const discs = getDiscs();
     const room = getRoom();
@@ -218,8 +328,6 @@
       if (!d || !d.gr) continue;
       if (d.playerId == null) continue;
 
-      // FIX BUG 4: solo grabamos en la transición false→true.
-      // El estado sostenido (jugador manteniendo X) se ignora.
       const isKickingNow = d.isKicking === true;
       const wasKicking = discWasKicking.get(d.playerId) === true;
       discWasKicking.set(d.playerId, isKickingNow);
@@ -268,7 +376,6 @@
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   }
 
-  // ─── Inferencia de scorer/assister ────────────────────────────
   function inferGoal(teamId, historySource, nowRef) {
     const history = historySource || kickHistory;
     const now = nowRef || performance.now();
@@ -276,12 +383,7 @@
     const stadium = room && room.state && room.state.gameState && room.state.gameState.stadium;
     const halfWidth = stadium && typeof stadium.width === 'number' ? stadium.width : 400;
 
-    // Pool de kicks recientes, sin filtrar por equipo todavía.
     const recent = history.filter(k => (now - k.ts) < SCORER_WINDOW_MS);
-
-    // Preferimos kicks del mismo equipo. Si no hay, caemos a
-    // cualquier kick reciente — cubre autogoles legítimos y casos
-    // donde el teamId del kick quedó mal grabado.
     const sameTeam = recent.filter(k => k.teamId === teamId);
     const pool = sameTeam.length > 0 ? sameTeam : recent;
 
@@ -315,7 +417,6 @@
       }
     }
 
-    // Diagnóstico: si no hay candidatos, mostrar por qué.
     if (!candidates.length) {
       const uk = history.length ? history[history.length - 1] : null;
       warn('inferGoal: sin candidatos', {
@@ -336,8 +437,6 @@
     };
   }
 
-  // ─── Detección de autogol ──────────────────────────────────────
-  // No marcamos autogol si el teamId del kicker es 0 (desconocido).
   function resolveOwnGoal(teamId, goalInfo) {
     if (!goalInfo.scorer) return { isOwn: false, realScorerId: null, realAssisterId: null };
     const scorerTeam = goalInfo.scorer.teamId;
@@ -351,7 +450,6 @@
     return { isOwn: true, realScorerId: goalInfo.scorer.playerId, realAssisterId: null };
   }
 
-  // ─── Procesamiento efectivo de un gol ────────────────────────
   function processGoal(teamId, historySnapshot, nowRef) {
     const goalInfo = inferGoal(teamId, historySnapshot, nowRef);
     const resolved = resolveOwnGoal(teamId, goalInfo);
@@ -376,13 +474,10 @@
     post('/match/goal', body);
   }
 
-  // ─── Eventos del juego ──────────────────────────────────────────
   function onGameStart() {
     const room = getRoom();
     if (!room || !room.players) {
       warn('gameStart sin room');
-      // FIX BUG 6: liberar el lock del watcher para que reintente
-      // en el próximo poll (si esta llamada vino del watcher).
       midGameArmed = false;
       return;
     }
@@ -407,15 +502,7 @@
       return;
     }
 
-    // FIX BUG 5: limpiar goles huérfanos de un match anterior cuyo
-    // /match/end no llegó a confirmar. Antes se drenaban acá por
-    // error y contaminaban el partido nuevo.
     pendingGoals.length = 0;
-
-    // FIX BUG 4 (higiene): limpiar el estado de transición por
-    // jugador al arrancar un partido nuevo. Sin esto, un jugador
-    // que quedó con isKicking=true al terminar el partido anterior
-    // podría no registrar su primer kick del nuevo.
     discWasKicking.clear();
 
     kickHistory.length = 0;
@@ -456,6 +543,10 @@
     });
   }
 
+  // FIX #301a: onGameEnd ahora encola en pendingEnds en vez de
+  // postear una sola vez. El nulling de matchId es inmediato (para
+  // que no se re-use si algo reentra), pero el payload se preserva
+  // en la cola hasta que el POST confirme OK.
   function onGameEnd(/* data */) {
     armed = false;
     stopKickLoop();
@@ -478,16 +569,16 @@
 
     const roomId = (new URLSearchParams(location.search).get('roomId')) || (room && room.id) || '';
 
-    log('gameEnd → post /match/end', { matchId, scoreRed, scoreBlue });
+    const mid = matchId;
+    matchId = null;
 
-    post('/match/end', {
-      matchId,
+    log('gameEnd → encolando /match/end', { matchId: mid, scoreRed, scoreBlue });
+
+    enqueueMatchEnd({
+      matchId: mid,
       scoreRed,
       scoreBlue,
       roomId: String(roomId),
-    }).then(res => {
-      log('match end respondido:', res);
-      matchId = null;
     });
   }
 
@@ -511,18 +602,37 @@
     processGoal(teamId, kickHistory, performance.now());
   }
 
+  // FIX #301c: onGameStop (host apretó Stop, o salimos mid-partido)
+  // ahora cierra el match con el score actual. Antes solo reseteaba
+  // estado local y el match quedaba abierto en el backend hasta que
+  // algún sweeper lo limpiara.
   function onGameStop() {
     armed = false;
     stopKickLoop();
-    matchId = null;
     midGameArmed = false;
+    midGameChecked = false;
     kickHistory.length = 0;
     pendingGoals.length = 0;
+
+    if (matchId) {
+      const mid = matchId;
+      matchId = null;
+
+      const room = getRoom();
+      const roomId = (new URLSearchParams(location.search).get('roomId')) || (room && room.id) || '';
+
+      log('gameStop con match activo → encolando /match/end', { matchId: mid });
+      enqueueMatchEnd({
+        matchId: mid,
+        scoreRed: lastScoreRed,
+        scoreBlue: lastScoreBlue,
+        roomId: String(roomId),
+      });
+    }
   }
 
-  // ─── Detección de join mid-game ─────────────────────────────
   function checkJoinedMidGame() {
-    if (matchId || midGameArmed) return;
+    if (matchId || midGameArmed || midGameChecked) return;
     const room = getRoom();
     if (!room) return;
 
@@ -532,6 +642,7 @@
     const inGame = window.__bcMatchRunning === true;
 
     if (inGame) {
+      midGameChecked = true;
       midGameArmed = true;
       log('partido en curso detectado al entrar → armando reporter');
       onGameStart();
@@ -557,7 +668,6 @@
     }, JOIN_MIDGAME_POLL_MS);
   }
 
-  // ─── Wire up ──────────────────────────────────────────────────
   function attachEvents() {
     if (!window.BCGameEvents) { setTimeout(attachEvents, 300); return; }
     window.BCGameEvents.on('gameStart', onGameStart);
@@ -565,11 +675,10 @@
     window.BCGameEvents.on('goal',      onGoal);
     window.BCGameEvents.on('gameStop',  onGameStop);
     log('eventos enganchados');
-    startKickLoop();
     startJoinMidGameWatcher();
   }
 
   attachEvents();
 
-  log('stats-reporter v10 cargado');
+  log('stats-reporter v11 cargado (retry + keepalive en /match/end)');
 })();

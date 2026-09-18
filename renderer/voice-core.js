@@ -4,6 +4,15 @@
 // BahiaClient — Voice Client (core reutilizable)
 // Instanciable. Vive en el launcher.
 // ============================================================
+// v2 — fixes #201:
+//   · leave() usa fetch(..., { keepalive: true }) para que el POST
+//     a /voice/leave sobreviva al cierre del launcher. Con _fetch()
+//     normal (AbortController + timeout), Chromium cancelaba el
+//     request durante el teardown y el backend dejaba el peer
+//     colgado hasta el timeout del heartbeat (~30s).
+//   · destroy() fuerza el keepalive leave sin pasar por las
+//     validaciones de leave(), y es idempotente.
+// ============================================================
 
 (function () {
 
@@ -36,16 +45,18 @@
       this.micId = null;
       this.speakerId = null;
 
-      // FIX #2: evita join() concurrente (doble-click / reentry)
+      // FIX #2 (v1): evita join() concurrente.
       this._joining = false;
-      // FIX #2: evita leave()+join() intercalados
+      // FIX #2 (v1): evita leave()+join() intercalados.
       this._leaving = false;
+      // FIX #201b: evita doble keepalive leave desde destroy()+leave().
+      this._leaveSent = false;
 
-      // FIX #12: dedupe de mensajes de señal (server podría repetir)
+      // FIX #12 (v1): dedupe de mensajes de señal.
       this._seenMsgIds = new Set();
       this._seenMsgOrder = [];
 
-      // FIX #9: evita re-emitir si nada cambió
+      // FIX #9 (v1): evita re-emitir si nada cambió.
       this._lastEmitHash = '';
 
       try { this.micId = localStorage.getItem('bc_mic_id') || null; } catch(e){}
@@ -82,7 +93,7 @@
       } catch(e){}
     }
 
-    // FIX #8: retry opcional para endpoints críticos (signal, join)
+    // FIX #8 (v1): retry opcional para endpoints críticos.
     async _fetch(path, opts, retries = 0) {
       const be = this.getBackend();
       if (!be || !be.url) return null;
@@ -118,6 +129,30 @@
       return null;
     }
 
+    // FIX #201a: variante "fire-and-forget" sin AbortController.
+    // Se usa solo para /voice/leave durante teardown. El keepalive
+    // permite que Chromium mantenga el request vivo aunque la página
+    // se esté cerrando. No pasar `signal` — son mutuamente excluyentes
+    // en la práctica (si el signal aborta, el request muere aunque
+    // tenga keepalive).
+    _sendLeaveKeepalive() {
+      if (this._leaveSent) return;
+      this._leaveSent = true;
+      const be = this.getBackend();
+      if (!be || !be.url) return;
+      try {
+        const url = String(be.url).replace(/\/+$/, '') + '/voice/leave';
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-bc-key': be.key || '' },
+          body: JSON.stringify({ nick: this.nick }),
+          keepalive: true,
+        }).catch(() => {});
+      } catch (e) {
+        // En teardown, fetch puede tirar synchronously; lo ignoramos.
+      }
+    }
+
     _rememberMsg(id) {
       if (!id) return true;
       if (this._seenMsgIds.has(id)) return false;
@@ -136,8 +171,7 @@
       try {
         let devices = await navigator.mediaDevices.enumerateDevices();
 
-        // FIX #5: NO pedir getUserMedia por abrir el panel.
-        // Solo intentar refresh de labels si YA tenemos permiso (no popup).
+        // FIX #5 (v1): NO pedir getUserMedia por abrir el panel.
         const hasLabels = devices.some(d =>
           (d.kind === 'audioinput' || d.kind === 'audiooutput') && d.label
         );
@@ -165,7 +199,7 @@
     }
 
     async setMic(deviceId) {
-      // FIX #10: revertir micId si getUserMedia falla
+      // FIX #10 (v1): revertir micId si getUserMedia falla.
       const prevId = this.micId;
       this.micId = deviceId;
       try { localStorage.setItem('bc_mic_id', deviceId); } catch(e){}
@@ -219,7 +253,7 @@
       try {
         this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
       } catch (e) {
-        // FIX #6: si el device guardado ya no existe, caer a default
+        // FIX #6 (v1): si el device guardado ya no existe, caer a default.
         if (this.micId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {
           console.warn('[voice] mic guardado no disponible, usando default');
           this.micId = null;
@@ -229,16 +263,15 @@
           throw e;
         }
       }
-      // FIX #7: aplicar muted al track (persiste entre rejoins)
+      // FIX #7 (v1): aplicar muted al track (persiste entre rejoins).
       this.localStream.getAudioTracks().forEach(t => { t.enabled = !this.muted; });
       return this.localStream;
     }
 
     // ─── lifecycle ──────────────────────────────────────────
     async join(newChannelId, newChannelLabel) {
-      // FIX #2: anti doble-click / reentry
+      // FIX #2 (v1): anti doble-click / reentry.
       if (this._joining) return;
-      // FIX #2: esperar si hay un leave en curso
       if (this._leaving) {
         for (let i = 0; i < 20 && this._leaving; i++) {
           await new Promise(r => setTimeout(r, 50));
@@ -256,14 +289,13 @@
 
         await this.ensureMic();
 
-        // FIX #1: NO marcar joined hasta que el server confirme
+        // FIX #1 (v1): NO marcar joined hasta que el server confirme.
         const res = await this._fetch('/voice/join', {
           method: 'POST',
           body: JSON.stringify({ nick: this.nick, roomId: this.channelId, muted: this.muted }),
         }, 2);
 
         if (res === null) {
-          // server caído → teardown mic para no dejar grabando solo
           if (this.localStream) {
             this.localStream.getTracks().forEach(t => t.stop());
             this.localStream = null;
@@ -272,6 +304,10 @@
         }
 
         this.joined = true;
+        // FIX #201b: resetear el flag en un join exitoso, para que un
+        // leave posterior (o destroy) sí mande el keepalive.
+        this._leaveSent = false;
+
         this.peersTimer = setInterval(() => {
           this._syncPeers().catch(()=>{});
         }, PEER_POLL_MS);
@@ -306,12 +342,11 @@
         clearInterval(this.signalTimer);   this.signalTimer = null;
         clearInterval(this.heartbeatTimer); this.heartbeatTimer = null;
 
-        try {
-          await this._fetch('/voice/leave', {
-            method: 'POST',
-            body: JSON.stringify({ nick: this.nick }),
-          });
-        } catch(e){}
+        // FIX #201a: keepalive en vez de _fetch. El AbortController de
+        // _fetch cancela el POST durante el teardown del renderer (close
+        // del launcher, alt+F4, pagehide). Con keepalive: true el request
+        // sobrevive al unload y el backend limpia el peer al toque.
+        this._sendLeaveKeepalive();
 
         for (const [, p] of this.peers) {
           try { p.pc.close(); } catch(e){}
@@ -334,7 +369,7 @@
     }
 
     toggleMute() {
-      // FIX #7: permitir toggle aunque no haya stream (pre-config)
+      // FIX #7 (v1): permitir toggle aunque no haya stream (pre-config).
       this.muted = !this.muted;
       if (this.localStream) {
         this.localStream.getAudioTracks().forEach(t => { t.enabled = !this.muted; });
@@ -362,7 +397,7 @@
       for (const peer of data.peers) {
         if (!peer || !peer.nick) continue;
         const nk = peer.nick.toLowerCase();
-        // FIX #11: ignorar si el server me devuelve a mí mismo
+        // FIX #11 (v1): ignorar si el server me devuelve a mí mismo.
         if (nk === myNk) continue;
         seen.add(nk);
         if (!this.peers.has(nk)) {
@@ -395,10 +430,10 @@
         pc, audio,
         nick: remoteNick,
         muted: false,
-        // FIX #4: queue de ICE hasta tener remote description
+        // FIX #4 (v1): queue de ICE hasta tener remote description.
         pendingIce: [],
         hasRemote: false,
-        // FIX #3: perfect negotiation — polite cede en colisión
+        // FIX #3 (v1): perfect negotiation — polite cede en colisión.
         polite: !iAmOfferer,
         makingOffer: false,
       };
@@ -432,7 +467,7 @@
         }
       };
 
-      // FIX #13: auto-cleanup de peers muertos
+      // FIX #13 (v1): auto-cleanup de peers muertos.
       pc.oniceconnectionstatechange = () => {
         const st = pc.iceConnectionState;
         if (st === 'failed' || st === 'closed') {
@@ -493,7 +528,7 @@
       );
       if (!data || !data.messages) return;
       for (const msg of data.messages) {
-        // FIX #12: dedupe
+        // FIX #12 (v1): dedupe.
         const msgId = msg.id ||
           (String(msg.from) + '|' + String(msg.type) + '|' +
            JSON.stringify(msg.payload || {}).slice(0, 64));
@@ -514,7 +549,7 @@
 
       let entry = this.peers.get(nk);
       if (!entry) {
-        // no existía: lo creamos como "no offerer" (polite). Si nos ofertó, respondemos.
+        // no existía: lo creamos como "no offerer" (polite).
         await this._createPeer(from, false);
         entry = this.peers.get(nk);
         if (!entry) return;
@@ -522,10 +557,10 @@
       const pc = entry.pc;
 
       if (type === 'offer') {
-        // FIX #3: perfect negotiation
+        // FIX #3 (v1): perfect negotiation.
         const collision = entry.makingOffer || pc.signalingState !== 'stable';
         if (collision && !entry.polite) {
-          // somos impolite → ignoramos su offer y seguimos con el nuestro
+          // somos impolite → ignoramos su offer y seguimos con el nuestro.
           return;
         }
         try {
@@ -557,25 +592,57 @@
           console.warn('[voice] handle answer failed:', e.message);
         }
       } else if (type === 'ice') {
-        // FIX #4: queuear si todavía no hay remote description
+        // FIX #4 (v1): queuear si todavía no hay remote description.
         if (!entry.hasRemote) {
           entry.pendingIce.push(payload);
           return;
         }
-        try { await pc.addIceCandidate(new RTCIceCandidate(payload)); } catch(e){}
+        try { await entry.pc.addIceCandidate(new RTCIceCandidate(payload)); } catch(e){}
       }
     }
 
     // ─── cleanup ────────────────────────────────────────────
-    // FIX #13: destroy total (por si recreás el cliente al cambiar nick)
+    // FIX #201b: destroy total e idempotente. Si el cliente todavía
+    // está joined, forzamos un keepalive leave sin pasar por las
+    // validaciones de leave() (que pueden haber sido saltadas si el
+    // join falló a medias y _leaving quedó en estado raro). El flag
+    // _leaveSent evita doble send si leave() ya se llamó antes.
     async destroy() {
-      try { await this.leave(); } catch(e){}
-      this._seenMsgIds.clear();
-      this._seenMsgOrder.length = 0;
-      this.onStateChange = () => {};
+      try {
+        // Cortar todos los timers primero, así nada re-entra.
+        this.joined = false;
+        clearInterval(this.peersTimer);    this.peersTimer = null;
+        clearInterval(this.signalTimer);   this.signalTimer = null;
+        clearInterval(this.heartbeatTimer); this.heartbeatTimer = null;
+
+        // Red de seguridad: si por lo que sea leave() no llegó a mandar
+        // el keepalive, lo mandamos acá. Idempotente por _leaveSent.
+        this._sendLeaveKeepalive();
+
+        // Teardown local de peers y stream.
+        for (const [, p] of this.peers) {
+          try { p.pc.close(); } catch(e){}
+          try { p.audio.remove(); } catch(e){}
+        }
+        this.peers.clear();
+
+        if (this.localStream) {
+          this.localStream.getTracks().forEach(t => t.stop());
+          this.localStream = null;
+        }
+
+        this._seenMsgIds.clear();
+        this._seenMsgOrder.length = 0;
+        this._emit(true);
+      } catch (e) {
+        console.warn('[voice-core] destroy:', e.message);
+      } finally {
+        // Desvincular callback para evitar emisiones post-destroy.
+        this.onStateChange = () => {};
+      }
     }
   }
 
   window.BCVoiceClient = BCVoiceClient;
-  console.log('[voice-core] cargado');
+  console.log('[voice-core] cargado v2');
 })();

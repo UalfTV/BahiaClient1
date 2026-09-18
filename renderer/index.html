@@ -657,7 +657,7 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
     <div class="logo">
       <div class="logo-mark">BC</div>
       <span class="logo-text">Bahia<b>Client</b></span>
-      <span class="logo-ver" id="app-version-txt">v0.2.0</span>
+      <span class="logo-ver" id="app-version-txt">v0.2.8</span>
     </div>
     <div class="tb-spacer"></div>
     <div class="tb-right">
@@ -830,9 +830,7 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
       </div>
 
       <div class="sh-pane" id="sh-pane-party" style="display:none">
-        <div class="party-container" id="party-container">
-          <!-- Se llena dinámicamente -->
-        </div>
+        <div class="party-container" id="party-container"></div>
       </div>
 
       <div class="sh-pane" id="sh-pane-discover" style="display:none">
@@ -876,7 +874,6 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
         <i class="ti ti-download"></i>
         <span>v<span id="game-update-version">—</span></span>
       </div>
-      <!-- perf-badge eliminado: el FPS real vive en el game view (bc-perf-overlay) -->
     </div>
     <div class="game-error" id="game-error"></div>
     <div class="webview-wrap">
@@ -1265,7 +1262,7 @@ button{-webkit-tap-highlight-color:transparent;border:none;background:none;color
         <span class="set-label"><i class="ti ti-info-circle"></i> Acerca de</span>
         <div class="set-row">
           <div class="set-row-text">
-            <div class="set-row-title">BahiaClient <span id="settings-version" style="color:#c084fc;font-weight:800">v0.2.0</span></div>
+            <div class="set-row-title">BahiaClient <span id="settings-version" style="color:#c084fc;font-weight:800">v0.2.8</span></div>
             <div class="set-row-desc">Versión, logs, y links útiles.</div>
           </div>
           <button class="fb" onclick="closeSettingsModal();openAboutModal()">Ver</button>
@@ -1441,12 +1438,23 @@ const BANNERS = {
 const PRESET_COLORS = [null,'#2f6e46','#7c3aed','#3f8a5c','#dc2626','#f97316','#eab308','#10b981','#c084fc','#c084fc','#a855f7','#c084fc','#f43f5e','#6bbf6e','#14b8a6','#a3a3a3'];
 
 let currentProfile = { avatarColor: null, banner: null, bio: '' };
+
+// FIX #28: LRU de 50. Antes la cache crecía sin tope con cada perfil
+// de amigo que abrías. Ahora se auto-limita.
 const friendProfileCache = new Map();
+const FRIEND_PROFILE_CACHE_MAX = 50;
+function cacheSetFriendProfile(key, value) {
+  if (friendProfileCache.has(key)) friendProfileCache.delete(key);
+  friendProfileCache.set(key, value);
+  while (friendProfileCache.size > FRIEND_PROFILE_CACHE_MAX) {
+    const first = friendProfileCache.keys().next().value;
+    friendProfileCache.delete(first);
+  }
+}
+
 const friendAvatarCache = new Map();
 let friendAvatarCacheOrder = [];
 let _lastProfileToast = 0;
-
-// (cacheSetLRU eliminado — no se usaba nunca)
 
 let streamerMode = false;
 try { streamerMode = localStorage.getItem('bc_streamer') === '1'; } catch(e) {}
@@ -1645,21 +1653,16 @@ let offlineRetries = 0;
 let voiceState = { joined: false, muted: false, peerCount: 0 };
 
 const $ = id => document.getElementById(id);
-function escapeHtml(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-// escapeAttr solo para atributos HTML puros (p.ej. data-*). Para JS inline usar jsString().
+
+// FIX #205: hoisting del mapa de escape. Antes se creaba un objeto
+// literal nuevo por cada match del regex. escapeHtml se invoca en
+// cada render de salas/chat/amigos — con 500 salas eran ~1500 allocs
+// por render, y el render se dispara cada 25s + cada filtro + cada
+// búsqueda.
+const _HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function escapeHtml(s){ return String(s ?? '').replace(/[&<>"']/g, c => _HTML_ESC[c]); }
 function escapeAttr(s){ return escapeHtml(s); }
 
-/**
- * Devuelve un literal JS de string (con comillas simples) seguro para
- * interpolarse DENTRO de un atributo HTML entre comillas dobles.
- *
- * Escapa:
- *  - `"` → `\u0022` (para que no rompa el atributo)
- *  - `'` → `\'`      (para que no rompa el string JS)
- *  - `\` → `\\`
- *  - `<>&` → `\u003c\u003e\u0026` (defensa extra)
- *  - saltos de línea → escapes
- */
 function jsString(s){
   const str = String(s ?? '');
   let out = "'";
@@ -2011,6 +2014,9 @@ if (window.electronAPI?.onPlayInvite) {
   });
 }
 
+// FIX #204: si el amigo no está en la lista local, la lista está
+// desactualizada (ej. nos aceptó hace poco y el refresh no corrió
+// todavía). Forzar un refresh para que aparezca.
 if (window.electronAPI?.onFriendOnline) {
   window.electronAPI.onFriendOnline((data) => {
     const idx = socialState.friendsList.findIndex(f => f.playerId === data.friendPlayerId);
@@ -2019,6 +2025,9 @@ if (window.electronAPI?.onFriendOnline) {
       socialState.friendsList[idx].roomId = data.roomId;
       socialState.friendsList[idx].roomName = data.roomName;
       renderFriends();
+    } else {
+      // FIX #204: el amigo no está en la lista local → forzar refresh
+      refreshSocial();
     }
     if(data.online === true){
       showSocialToast(`${data.friendNick} se conectó`, 'info', null, 2500);
@@ -2030,7 +2039,10 @@ if (window.electronAPI?.onNotification) {
   window.electronAPI.onNotification((data) => {
     if(data.kind === 'hello'){
       if(Array.isArray(data.notifications)){
-        socialState.notifications = data.notifications.slice();
+        // FIX #203: capear a 100 en el load inicial. Antes se guardaban
+        // todas las que mandara el server, y addNotificationLocal
+        // (que sí capea) solo actúa sobre las nuevas.
+        socialState.notifications = data.notifications.slice(0, 100);
         const incoming = data.notifications.filter(n => n.type === 'friend_request');
         socialState.incoming = incoming.map(n => ({
           playerId: n.fromPlayerId,
@@ -2399,7 +2411,21 @@ function computeFriendsCounters(){
   return { all: all.length, fav, online, inRoom, offline, requests: socialState.incoming.length };
 }
 
+// FIX #142: coalescing. Antes cada evento del SSE (o cambio de filtro,
+// o refresh) reescribía todo el HTML de la lista de amigos. Con 50+
+// amigos, esto genera un DOM rebuild completo por evento. Ahora las
+// llamadas rápidas se fusionan en un solo render por frame.
+let _renderFriendsScheduled = false;
 function renderFriends(){
+  if (_renderFriendsScheduled) return;
+  _renderFriendsScheduled = true;
+  requestAnimationFrame(() => {
+    _renderFriendsScheduled = false;
+    _renderFriendsNow();
+  });
+}
+
+function _renderFriendsNow(){
   const wrap = $('friends-wrap');
   if(!wrap) return;
   const c = computeFriendsCounters();
@@ -2814,6 +2840,9 @@ function onClanSearchInput(v){
   renderClans();
 }
 
+// FIX #147: throttle. Antes clic rápido en el ícono Social disparaba
+// N llamadas a /friends/list + /notifications.
+let _lastSocialRefresh = 0;
 function setNav(view){
   document.querySelectorAll('.sb').forEach(s => s.classList.remove('on'));
   const btn = $(view === 'social' ? 'nav-social' : view === 'stats' ? 'nav-stats' : 'nav-rooms');
@@ -2823,7 +2852,14 @@ function setNav(view){
   const sv = $('social-view'); if(sv) sv.style.display = view === 'social' ? 'flex' : 'none';
   const st = $('stats-view');  if(st) st.style.display = view === 'stats'  ? 'flex' : 'none';
 
-  if(view === 'social'){ setSocialTab(socialState.tab); refreshSocial(); }
+  if(view === 'social'){
+    setSocialTab(socialState.tab);
+    // FIX #147: throttle de 3s para evitar spam de /friends/list.
+    if (Date.now() - _lastSocialRefresh > 3000) {
+      _lastSocialRefresh = Date.now();
+      refreshSocial();
+    }
+  }
   if(view === 'stats'){ loadStats(); }
 }
 
@@ -2907,7 +2943,6 @@ async function backgroundFriendsCheck(){
 function openWelcomeModal(){
   $('welcome-modal-bg').classList.add('on');
   renderWelcomeOAuthBoxes();
-  // FIX: el input correcto es welcome-id-input, no welcome-nick-input
   setTimeout(() => $('welcome-id-input')?.focus(), 100);
 }
 function renderWelcomeOAuthBoxes(){
@@ -3023,7 +3058,6 @@ async function finishWelcome(){
       updateProfileUI();
       $('welcome-modal-bg').classList.remove('on');
 
-      // FIX: limpiar timer pendiente por si el usuario tipeó justo antes de confirmar
       clearTimeout(_welcomeIdCheckTimer);
       _welcomeIdCheckTimer = null;
 
@@ -3132,6 +3166,35 @@ function copyClientId(){ if(clientId){ navigator.clipboard?.writeText?.(clientId
 // ============================================================
 
 const BC_RETIRED_BACKEND_URLS = ['http://192.168.18.71:8787'];
+
+// FIX #37: cache en memoria sincronizado con bc-config.json (fuente única).
+let _backendCache = null;
+
+async function refreshBackendCache() {
+  try {
+    const cfg = await window.electronAPI?.configGet?.();
+    if (cfg && typeof cfg === 'object') {
+      _backendCache = {
+        url: String(cfg.bcBackendUrl || '').trim().replace(/\/+$/, ''),
+        key: String(cfg.bcBackendKey || '').trim(),
+      };
+      return _backendCache;
+    }
+  } catch(e){}
+  return _backendCache || { url: '', key: '' };
+}
+
+async function hydrateBackendFromMain() {
+  try {
+    const cfg = await window.electronAPI?.configGet?.();
+    if (cfg && typeof cfg === 'object') {
+      if (cfg.bcBackendUrl) { try { localStorage.setItem('bc_backend_url', cfg.bcBackendUrl); } catch(e){} }
+      if (cfg.bcBackendKey) { try { localStorage.setItem('bc_backend_key', cfg.bcBackendKey); } catch(e){} }
+      await refreshBackendCache();
+    }
+  } catch(e) {}
+}
+
 function ensureBackendDefaults(){
   try {
     const stored = localStorage.getItem('bc_backend_url');
@@ -3143,7 +3206,9 @@ function ensureBackendDefaults(){
     if(!localStorage.getItem('bc_backend_key') && BC_DEFAULT_BACKEND_KEY) localStorage.setItem('bc_backend_key', BC_DEFAULT_BACKEND_KEY);
   } catch(e){}
 }
+
 function getBackendConfig(){
+  if (_backendCache) return _backendCache;
   let url = '', key = '';
   try { url = (localStorage.getItem('bc_backend_url') || '').trim(); } catch(e){}
   try { key = (localStorage.getItem('bc_backend_key') || '').trim(); } catch(e){}
@@ -3261,11 +3326,15 @@ function togglePerfOverlay(){
 
 function openReskin(tab){
   closeSettingsModal();
-  setTimeout(function(){
-    if (window.BCReskinUI && window.BCReskinUI.open) {
-      window.BCReskinUI.open(tab);
+  if (gameWebview && isInRoom()) {
+    try {
+      gameWebview.send('bc-host-open-reskin', tab || 'ball');
+      return;
+    } catch(e) {
+      console.warn('[reskin] no se pudo delegar al game view:', e.message);
     }
-  }, 150);
+  }
+  toast('Abrí la personalización desde adentro de una sala', 'info', 3500);
 }
 
 // ============================================================
@@ -3293,16 +3362,27 @@ function applyDiscordConfig(){
 }
 function isInRoom(){ const o = $('game-overlay'); return o && o.style.display !== 'none'; }
 
+let _discordMatchStart = 0;
+
 function updateDiscordPresence(){
   if(!isDiscordEnabled() || !BC_DEFAULT_DISCORD_APP_ID) return;
   if(isInRoom()){
+    if(!_discordMatchStart) _discordMatchStart = Math.floor(Date.now() / 1000);
     const roomName = (selectedRoom?.name || $('game-room-name')?.textContent || 'Sala').slice(0, 128);
     const inVoice = voiceState.joined;
-    const activity = { details: 'Jugando en una sala', state: roomName, largeImageKey: 'bc_logo', largeImageText: 'BahiaClient', instance: false };
+    const activity = {
+      details: 'Jugando en una sala',
+      state: roomName,
+      startTimestamp: _discordMatchStart,
+      largeImageKey: 'bc_logo',
+      largeImageText: 'BahiaClient',
+      instance: false,
+    };
     if(inVoice){ activity.smallImageKey = 'bc_voice'; activity.smallImageText = 'En llamada de voz'; }
     else { activity.smallImageKey = 'bc_playing'; activity.smallImageText = 'Jugando'; }
     window.electronAPI?.discordSetActivity?.(activity);
   } else {
+    if(_discordMatchStart) _discordMatchStart = 0;
     window.electronAPI?.discordSetActivity?.({ details: 'En el launcher', state: 'Explorando salas de HaxBall', largeImageKey: 'bc_logo', largeImageText: 'BahiaClient', instance: false });
   }
 }
@@ -3716,7 +3796,6 @@ function updateBannerUI(){
       if(gameBadge) gameBadge.style.display = 'none';
   }
 }
-// handleUpdateAction eliminado (código muerto — el botón se reasigna por updateBannerUI)
 window.electronAPI?.onUpdateStatus?.((s) => { updateInfo = { ...updateInfo, ...s }; updateBannerUI(); });
 
 // ============================================================
@@ -3888,7 +3967,19 @@ function startHeartbeat(){
 }
 function stopHeartbeat(notifyLeave){
   clearInterval(heartbeatTimer); heartbeatTimer = null;
-  if(notifyLeave !== false && nickname) backendFetch('/leave', { method: 'POST', body: JSON.stringify({ nick: nickname }) });
+  if(notifyLeave === false || !nickname) return;
+  const { url, key } = getBackendConfig();
+  if(!url) return;
+  try {
+    // FIX #4: keepalive para que el leave sobreviva al cierre. Con fetch
+    // normal, el navegador cancela el request durante beforeunload.
+    fetch(url + '/leave', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-bc-key': key },
+      body: JSON.stringify({ nick: nickname }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch(e) {}
 }
 
 // ============================================================
@@ -3911,7 +4002,11 @@ async function refreshBcUsers(){
   const newMap = new Map();
   for (const u of users) {
     const key = String(u.nick).toLowerCase().trim();
-    newMap.set(key, { nick: u.nick, playerId: u.playerId || null, haxballPlayerId: u.haxballPlayerId || null });
+    // FIX #60: sanitizar el nick (viene de otro cliente, no confiamos).
+    // Sacamos backticks, $ y \ para que no rompan template literals si
+    // algún día se interpolan en JS.
+    const safeNick = String(u.nick).replace(/[`$\\]/g, '');
+    newMap.set(key, { nick: safeNick, playerId: u.playerId || null, haxballPlayerId: u.haxballPlayerId || null });
   }
   let changed = newMap.size !== bcUsersInRoom.size;
   if (!changed) {
@@ -3944,12 +4039,18 @@ function pushBcUsersToGame(){
     payload[key] = { nick: val.nick, playerId: val.playerId };
   }
   const json = JSON.stringify(payload);
+  // FIX #60: NO usar template literal. JSON.stringify NO escapa backticks,
+  // así que un nick con ` cierra el template e inyecta código arbitrario
+  // en el game view. Con concatenación, el backtick queda dentro de una
+  // comilla doble del JSON y es código inerte.
+  const script =
+    '(function(){\n' +
+    '  window.__bcUsersMap = ' + json + ';\n' +
+    '  if(typeof window.__bcMarkRefresh === "function") window.__bcMarkRefresh();\n' +
+    '  return "ok";\n' +
+    '})();';
   try {
-    gameWebview.executeJavaScript(`(function(){
-      window.__bcUsersMap = ${json};
-      if(typeof window.__bcMarkRefresh === 'function') window.__bcMarkRefresh();
-      return 'ok';
-    })();`).catch(() => {});
+    gameWebview.executeJavaScript(script).catch(() => {});
   } catch(e){}
 }
 
@@ -4015,7 +4116,11 @@ function injectBcMarkScript(){
 
     try {
       gameWebview.executeJavaScript(buildBcMarkScript()).then(r => {
-        console.log('[bc-mark]', r, 'intento', tries);
+        // FIX #263: no loguear cada intento. Antes llenaba la consola de
+        // '[bc-mark] no-iframe intento 47' durante la carga lenta del iframe.
+        if (r === 'installed' || r === 'already' || tries % 20 === 0) {
+          console.log('[bc-mark]', r, 'intento', tries);
+        }
         if(r === 'no-iframe' && tries < MAX){
           setTimeout(attempt, 300);
         } else {
@@ -4183,10 +4288,8 @@ function setBootStatus(text){
   const el = $('bc-boot-status');
   if (el) el.textContent = text;
 }
-// Seguridad: si por lo que sea loadRooms nunca resuelve (backend caído
-// sin lanzar catch, etc.), no dejamos al usuario mirando el splash
-// para siempre.
 setTimeout(hideBootSplash, 8000);
+
 function sel(id){
   selectedRoom = ROOMS.find(r=>String(r.id)===String(id));
   const el = $('sel-name');
@@ -4295,7 +4398,6 @@ function renderStats(data){
 let gameRoomUrl = null;
 let exitGameCleanupTimer = null;
 let reloadInFlight = false;
-// FIX race: cada exitGame incrementa esto; sólo el destroy cuyo gen coincida se ejecuta
 let exitGeneration = 0;
 
 const BC_GAME_PRELOAD_URL = (() => {
@@ -4426,7 +4528,6 @@ function gameWebviewDomReadyHandler(){
       }
     });
 
-    // Enviar estado de party inicial al game view
     setTimeout(() => {
       if (partyState.party && gameWebview) {
         try { gameWebview.send('bc-host-party-update', partyState.party); } catch(e){}
@@ -4487,16 +4588,10 @@ async function enterRoom(){
   if(!selectedRoom){ alert('Seleccioná una sala primero.'); return; }
   if(!nickname){ openNickModal(); return; }
 
-  // [FIX CONTRASEÑA] Antes se intentaba entrar siempre sin contrasena y
-  // se esperaba que game.js detectara el rechazo y pidiera la
-  // contrasena reactivamente — ese camino dependia de que el evento de
-  // cierre de conexion tuviera exactamente la forma esperada, y si no
-  // pegaba, no se mostraba ningun prompt. Ahora la pedimos ACA, antes
-  // de entrar, si la sala figura como bloqueada en el listado.
   var roomPassword = '';
   if (selectedRoom.locked) {
     var typed = await bcAskRoomPassword();
-    if (typed == null) return; // cancelo
+    if (typed == null) return;
     roomPassword = typed;
   }
 
@@ -4541,14 +4636,12 @@ function exitGame(){
   const overlay = $('game-overlay');
   if(overlay.style.display === 'none') return;
 
-  // FIX race: cada exit incrementa la generación actual.
   exitGeneration++;
   const myGen = exitGeneration;
 
   const vp = $('voice-panel');
   if(vp) vp.classList.remove('on');
 
-  // 1) Avisarle a la webview que se desconecte de la sala limpiamente.
   if (gameWebview) {
     try {
       gameWebview.executeJavaScript(
@@ -4567,15 +4660,8 @@ function exitGame(){
   stopBcUsersPolling();
   reloadInFlight = false;
 
-  // 2) Forzar el cierre del WebSocket.
-  // NO seteamos about:blank: con el preload file:// adjunto, Chromium
-  // tira ERR_FAILED (-2) y la webview queda en estado inconsistente.
-  // El destroyAndRecreateGameWebview() de abajo mata el WebSocket igual.
-
-  // 3) Recrear la webview después — sólo si nadie reentró mientras tanto.
   clearTimeout(exitGameCleanupTimer);
   exitGameCleanupTimer = setTimeout(() => {
-    // Si el user reentró (o hizo otro exit), este cleanup ya no aplica.
     if (myGen !== exitGeneration) return;
     if (isInRoom()) return;
     destroyAndRecreateGameWebview();
@@ -4584,18 +4670,26 @@ function exitGame(){
   gameRoomUrl = null;
   restartRoomsPolling();
   sendHeartbeat();
+  _discordMatchStart = 0;
   updateDiscordPresence();
   if(document.getElementById('stats-view')?.style.display !== 'none') loadStats();
 }
 
+// FIX #149: si hay cualquier modal abierto, las flechas / Enter / "/"
+// no deben navegar la lista de salas de fondo. Antes el único guard
+// era el de inputs, así que estando en el modal de perfil las flechas
+// movían la selección por debajo.
 document.addEventListener('keydown', (e) => {
-  // FIX: también excluir select para que ↑/↓ no muevan la sala cuando estás en un dropdown
   if(e.target.matches('input,textarea,select')) return;
+
+  // FIX #149: bloquear navegación si hay modal abierto.
+  if (document.querySelector('.modal-bg.on')) return;
+
   if(!isInRoom()){
     if(e.key === 'Enter' && selectedRoom){ e.preventDefault(); enterRoom(); }
     if(e.key === '/'){ e.preventDefault(); $('search-input')?.focus(); }
     if(e.key === 'Escape'){
-      // FIX: no cerrar modales críticos (beta, welcome, player-register, blocked)
+      // FIX #149: no cerrar modales críticos (beta, welcome, player-register, blocked)
       document.querySelectorAll('.modal-bg.on').forEach(m => {
         if (m.id && BC_CRITICAL_MODALS.has(m.id)) return;
         if (m.id === 'bc-blocked-modal-bg') return;
@@ -4736,7 +4830,6 @@ function renderParty() {
   const p = partyState.party;
   const members = Array.isArray(p.members) ? p.members : [];
   if (!members.length && !p.leaderId) {
-    // Objeto party vacío / malformado — lo tratamos como "sin party"
     partyState.party = null;
     return renderParty();
   }
@@ -4943,8 +5036,6 @@ async function bcVoiceRefreshDevices() {
   }
 }
 
-// FIX: e.target.isConnected evita que el panel se cierre cuando el click borra el nodo
-// (ej: botón Mutear → re-render → target detached → w.contains(target) = false)
 document.addEventListener('click', (e) => {
   const w = document.getElementById('voice-widget');
   const p = document.getElementById('voice-panel');
@@ -4961,10 +5052,7 @@ document.addEventListener('click', (e) => {
 
 ;(async () => {
   await loadClientId();
-  // FIX: setear las URLs del backend ANTES de cualquier fetch.
-  // Sin esto, una instalación nueva tiene localStorage vacío,
-  // backendFetch() devuelve null sin hacer fetch, y el usuario
-  // queda trabado en el modal de beta key para siempre.
+  await hydrateBackendFromMain();
   ensureBackendDefaults();
   const ok = await ensureBetaAccess();
   if(ok) startAppAfterBeta();

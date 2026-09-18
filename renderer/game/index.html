@@ -566,6 +566,18 @@
         if (typeof updatePerfDisplay === 'function') updatePerfDisplay();
       } catch(e){}
     });
+    // El launcher delega acá cuando el usuario clickea un botón de
+    // "Personalización" en Ajustes (reskin-ui.js solo está cargado
+    // en el game view, no en el launcher).
+    window.bcIPC.onHostMessage('open-reskin', function (tab) {
+      try {
+        if (window.BCReskinUI && window.BCReskinUI.open) {
+          window.BCReskinUI.open(tab || 'ball');
+        } else {
+          console.warn('[reskin] BCReskinUI no disponible todavía');
+        }
+      } catch (e) { console.warn('[reskin] no se pudo abrir:', e.message); }
+    });
   }
 
   console.log('[party-mini] cargado en el game view');

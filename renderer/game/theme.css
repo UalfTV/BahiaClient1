@@ -1029,7 +1029,6 @@ html, body {
    MODAL MENU
    ============================================================ */
 
-@keyframes bc-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes bc-modal-in {
   from { opacity: 0; transform: scale(.97) translateY(6px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }

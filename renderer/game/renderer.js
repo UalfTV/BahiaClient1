@@ -66,7 +66,6 @@ window.BCOriginalRenderer = function(API, params){
     texture.source.scaleMode = "linear";
     texture.source.addressMode = "clamp-to-edge";
     texture.source.resolution = oversample;
-    texture.resolution = oversample;
     var matrix = new PIXI.Matrix();
     return { texture, matrix };
   }
@@ -78,13 +77,33 @@ window.BCOriginalRenderer = function(API, params){
     "ES": ["¡El tiempo ha", "Terminado!", "¡El red ha", "Ganado!", "¡Punto para el", "Red!", "¡El azul ha", "Ganado!", "¡Punto para el", "Blue!", "Juego en", "Pausa"]
   };
 
-  var scriptElem = null, rendererObj = null, stage = null, stage2 = null, stage3 = null, playerContainer = null, nameContainer = null, haloContainer = null, texture1 = null, texture2 = null, texture3 = null, texture4 = null, customDiscInfo = [], customJointInfo = [], customSegmentInfo = [], customHaloInfo = null, textInfo = {time: 0,queue: []}, locationIndicatorInfo = {}, chatIndicatorInfo = {}, pauseRect = null, fpsText = null, fpsFrameCount = 0, fpsLastSecond = 0, fpsDisplay = 0, inputLagText = null, lastProcessedInputTime = 0, inputLagRollingSum = 0, inputLagRollingCount = 0, netGraphGfx = null, netPingText = null, netLossText = null, netHistory = [], netMedianPing = 0, netMaxPingValue = 0, lastRenderTime = null, spf = null, scale = thisRenderer.zoomCoeff, origin = {x: 0, y: 0}, gamePaused = false, framesInFlight = 0, rendererLifecycleToken = 0, renderBlockedByGPU = false, forceImmediateRender = false;
-  var maxFramesInFlight = 2;
+  var scriptElem = null, rendererObj = null, stage = null, stage2 = null, stage3 = null, playerContainer = null, nameContainer = null, haloContainer = null, texture1 = null, texture2 = null, texture3 = null, texture4 = null, customDiscInfo = [], customJointInfo = [], customSegmentInfo = [], customHaloInfo = null, textInfo = {time: 0,queue: []}, locationIndicatorInfo = {}, chatIndicatorInfo = {}, pauseRect = null, fpsText = null, fpsFrameCount = 0, fpsLastSecond = 0, fpsDisplay = 0, inputLagText = null, lastProcessedInputTime = 0, inputLagRollingSum = 0, inputLagRollingCount = 0, netGraphGfx = null, netPingText = null, netLossText = null, netHistory = [], netMedianPing = 0, netMaxPingValue = 0, lastRenderTime = null, spf = null, scale = thisRenderer.zoomCoeff, origin = {x: 0, y: 0}, gamePaused = false;
+
+  // FIX FPS v2: contenedor cacheado para los segmentos estáticos.
+  // Los segmentos del mapa no cambian una vez cargada la sala. Antes
+  // cada uno era un Graphics separado → ~50 draw calls por frame.
+  // Ahora todos viven en este contenedor, que se rasteriza UNA vez a
+  // una RenderTexture vía cacheAsTexture(). A partir de ese momento
+  // el mapa entero es 1 solo draw call.
+  var segmentsContainer = null;
+
+  // FIX (bug "desaparece el render tras varias partidas"):
+  // Flag para saber si ya intentamos regenerar stage/containers en
+  // este frame. Evita loop infinito si el room existe pero gameState
+  // sigue sin poblarse por algún motivo.
+  var _regenerateAttemptedThisFrame = false;
+
   var avatarImage = null;
   var _lastAvatarUrl = null;
 
-  // Anti-flicker del glow de kick. Cuando spameás X, isKicking alterna
-  // true/false a 60Hz. Sin un hold mínimo, el borde blanco parpadea.
+  var _cachedParentW = -1;
+  var _cachedParentH = -1;
+
+  // FIX FPS v2: cachear el objeto que devuelve resizeCanvas() para
+  // evitar una allocation por frame. Los callers solo leen, nadie
+  // muta. Si en el futuro alguien lo muta, hay que clonarlo.
+  var _dims = { width: 0, height: 0 };
+
   var KICK_HIGHLIGHT_MS = 150;
   var KICK_FADE_MS = 100;
 
@@ -98,6 +117,12 @@ window.BCOriginalRenderer = function(API, params){
     _lastAvatarUrl = playerAvatar;
     const el = document.createElement("img");
     el.crossOrigin = "anonymous";
+    el.onerror = () => {
+      if (avatarImage === el) {
+        avatarImage = null;
+        _lastAvatarUrl = null;
+      }
+    };
     el.src = playerAvatar;
     avatarImage = el;
   }
@@ -203,22 +228,36 @@ window.BCOriginalRenderer = function(API, params){
   }
 
   function _destroyDiscInfo(discInfo) {
+    if (!discInfo) return;
+
+    try { if (discInfo.gr) discInfo.gr.mask = null; } catch (e) {}
+    try { if (discInfo.avatarText) discInfo.avatarText.mask = null; } catch (e) {}
+    try { if (discInfo.playerNameText) discInfo.playerNameText.mask = null; } catch (e) {}
+
     discInfo.gr?.parent?.removeChild(discInfo.gr);
     discInfo.gr?.destroy();
     discInfo.mask?.parent?.removeChild(discInfo.mask);
     discInfo.mask?.destroy();
     discInfo.avatarText?.parent?.removeChild(discInfo.avatarText);
     discInfo.avatarText?.destroy();
+    if (discInfo.avatarMask) {
+      if (discInfo.avatarMask.parent) discInfo.avatarMask.parent.removeChild(discInfo.avatarMask);
+      discInfo.avatarMask.destroy();
+      discInfo.avatarMask = null;
+    }
     discInfo.playerNameText?.parent?.removeChild(discInfo.playerNameText);
     discInfo.playerNameText?.destroy();
-    discInfo.playerNameMask?.parent?.removeChild(discInfo.playerNameMask);
-    discInfo.playerNameMask?.destroy();
+    if (discInfo.playerNameMask) {
+      if (discInfo.playerNameMask.parent) discInfo.playerNameMask.parent.removeChild(discInfo.playerNameMask);
+      discInfo.playerNameMask.destroy();
+      discInfo.playerNameMask = null;
+    }
     discInfo.playerStroke?.parent?.removeChild(discInfo.playerStroke);
     discInfo.playerStroke?.destroy();
     discInfo.kickGlow?.parent?.removeChild(discInfo.kickGlow);
     discInfo.kickGlow?.destroy();
     if (discInfo.texture) {
-      discInfo?.texture?.destroy(true);
+      try { discInfo.texture.destroy(true); } catch (e) {}
       discInfo.texture = null;
     }
   }
@@ -228,15 +267,72 @@ window.BCOriginalRenderer = function(API, params){
     const idx = customDiscInfo.findIndex(info => info && info.playerId === playerId);
     if (idx === -1) return;
     _destroyDiscInfo(customDiscInfo[idx]);
-    customDiscInfo.splice(idx, 1);
+    customDiscInfo[idx] = null;
   }
 
   function _addMissingDiscInfos(){
     if (!stage2 || !customDiscInfo || !thisRenderer.room?.state?.gameState) return;
     const discs = thisRenderer.room.state.gameState.physicsState.discs;
-    for (let i = customDiscInfo.length; i < discs.length; i++){
-      customDiscInfo[i] = _createDiscGraphics(discs[i]);
+
+    if (discs.length === customDiscInfo.length) {
+      let same = true;
+      for (let i = 0; i < discs.length; i++) {
+        const d = discs[i];
+        const info = customDiscInfo[i];
+        const wantId = d ? (d.playerId == null ? null : d.playerId) : null;
+        const haveId = info ? (info.playerId == null ? null : info.playerId) : null;
+        const wantEmpty = !d;
+        const haveEmpty = !info;
+        if (wantEmpty && haveEmpty) continue;
+        if (wantEmpty !== haveEmpty || wantId !== haveId) { same = false; break; }
+      }
+      if (same) return;
     }
+
+    const byPlayerId = new Map();
+    for (let i = 0; i < customDiscInfo.length; i++) {
+      const info = customDiscInfo[i];
+      if (info && info.playerId != null) byPlayerId.set(info.playerId, info);
+    }
+
+    const oldArray = customDiscInfo.slice();
+    const nextArray = new Array(discs.length);
+    const usedPlayerIds = new Set();
+
+    for (let i = 0; i < discs.length; i++) {
+      const disc = discs[i];
+      if (!disc) { nextArray[i] = null; continue; }
+
+      if (disc.playerId != null) {
+        const existing = byPlayerId.get(disc.playerId);
+        if (existing) {
+          nextArray[i] = existing;
+          usedPlayerIds.add(disc.playerId);
+        } else {
+          nextArray[i] = _createDiscGraphics(disc);
+        }
+      } else {
+        const old = oldArray[i];
+        if (old && old.playerId == null) {
+          nextArray[i] = old;
+        } else {
+          nextArray[i] = _createDiscGraphics(disc);
+        }
+      }
+    }
+
+    for (const [pid, info] of byPlayerId) {
+      if (!usedPlayerIds.has(pid)) _destroyDiscInfo(info);
+    }
+    for (let i = 0; i < oldArray.length; i++) {
+      const info = oldArray[i];
+      if (info && info.playerId == null && nextArray[i] !== info) {
+        _destroyDiscInfo(info);
+      }
+    }
+
+    customDiscInfo.length = 0;
+    for (let i = 0; i < nextArray.length; i++) customDiscInfo.push(nextArray[i]);
   }
 
   function _addChatIndicatorForPlayer(playerId){
@@ -289,12 +385,10 @@ window.BCOriginalRenderer = function(API, params){
     else
       gr.circle(0, 0, discObj.radius + 10);
 
-    const bakedDiscTexture = (discObj.playerId == thisRenderer.followPlayerId && thisRenderer.playerAvatarTexturePath) ? bakeTextureFill(discObj.radius, discObj.radius) : null;
     const discTransparent = (discObj.color|0)==-1;
-    if (bakedDiscTexture || !discTransparent)
-      gr.fill(bakedDiscTexture || { color: Utils.numberToColor(discObj.color) });
+    if (!discTransparent)
+      gr.fill({ color: Utils.numberToColor(discObj.color) });
     gr.stroke({ color: 0x000000, width: thisRenderer.discLineWidth - 2, alignment: 0.5 });
-    stage2.addChild(gr);
 
     let gr2 = null, avatarText = null, playerNameText = null, playerNameMask = null, avatarMask, playerStroke, kickGlow;
 
@@ -326,7 +420,10 @@ window.BCOriginalRenderer = function(API, params){
         text: "",
         style: { fontFamily: ["Arial Black", "Arial Bold", "Gadget", "sans-serif"], fontSize: 16, align: "center", fill: "#000000", fontWeight: "900" }
       });
-      avatarText.resolution = 2;
+      // FIX FPS v2: bajado de 1.5 a 1. El texto igual se renderiza sobre
+      // un canvas HiDPI (devicePixelRatio), así que la pérdida visual es
+      // imperceptible a 12-16px, pero el área de la textura baja 2.25x.
+      avatarText.resolution = 1;
       avatarText.anchor.set(0.5);
       avatarMask = new PIXI.Graphics();
       if (thisRenderer.squarePlayers)
@@ -341,7 +438,8 @@ window.BCOriginalRenderer = function(API, params){
         text: player ? player.name : '?',
         style: { fontFamily: ["sans-serif"], fontSize: 12, fill: "#ffffff", fontWeight: "100" }
       });
-      playerNameText.resolution = 2;
+      // FIX FPS v2: idem, bajado de 1.5 a 1.
+      playerNameText.resolution = 1;
 
       if (2 * playerNameText.width > 160) {
         playerNameMask = new PIXI.Graphics();
@@ -358,7 +456,6 @@ window.BCOriginalRenderer = function(API, params){
         playerNameText.pivot.set(0, -discObj.radius * 1.65);
       }
 
-      stage2.removeChild(gr);
       playerContainer.addChild(gr);
       nameContainer.addChild(playerNameText);
       playerContainer.addChild(gr2);
@@ -366,25 +463,41 @@ window.BCOriginalRenderer = function(API, params){
       playerContainer.addChild(avatarMask);
       playerContainer.addChild(playerStroke);
       playerContainer.addChild(kickGlow);
+    } else {
+      stage2.addChild(gr);
     }
+
     return {
       gr, avatarText, avatarMask, playerNameText, mask: gr2,
       cache: null, teamCache: null, playerNameMask,
       playerId: discObj.playerId ?? null,
-      texture: bakedDiscTexture,
+      texture: null,
       playerStroke,
       kickGlow,
       strokeRadius: null,
       kickHighlightUntil: 0,
-      texturePath: thisRenderer.playerAvatarTexturePath,
-      isKicking: false
+      texturePath: null,
+      isKicking: false,
+      wasFollowPlayer: false,
     };
   }
 
   function regenerateNecessaryObjects({FillGradient, Matrix, Container, Graphics, Text, Sprite}, {players, gameState}){
     if (!gameState) return;
 
-    if (stage) stage.destroy({ children: true });
+    try { if (stage2 && !stage2.destroyed) stage2.destroy({ children: true }); } catch (e) {}
+    try { if (stage3 && !stage3.destroyed) stage3.destroy({ children: true }); } catch (e) {}
+    try { if (stage  && !stage.destroyed)  stage.destroy({ children: true });  } catch (e) {}
+    stage = null; stage2 = null; stage3 = null;
+    playerContainer = null; nameContainer = null; haloContainer = null;
+    pauseRect = null;
+    customHaloInfo = null;
+    textInfo = null;
+
+    // FIX FPS v2: al destruir stage2, su hijo segmentsContainer también
+    // se destruye (children:true). Solo hay que soltar la referencia.
+    segmentsContainer = null;
+
     if (thisRenderer.playerAvatarTexturePath) loadImages(thisRenderer.playerAvatarTexturePath);
     var {physicsState, stadium} = gameState;
     customDiscInfo = [];
@@ -494,7 +607,11 @@ window.BCOriginalRenderer = function(API, params){
           gr.stroke({ color: segmentObj.color, width: thisRenderer.generalLineWidth, alignment: 0.5 });
         gr.x = cx; gr.y = cy;
       }
-      stage2.addChild(gr);
+      // FIX FPS v2: si el contenedor cacheado existe, los segmentos van
+      // adentro. Si no, fallback a stage2 (nunca debería pasar, pero
+      // por seguridad).
+      if (segmentsContainer) segmentsContainer.addChild(gr);
+      else stage2.addChild(gr);
       customSegmentInfo[id] = {gr, cache:null};
     }
 
@@ -558,14 +675,14 @@ window.BCOriginalRenderer = function(API, params){
           x.alpha = CanvasText.alphaAnimator.eval(coeff2);
           x.x = origin.x+ width
           x.y = origin.y + 35*(1-this.arr.length)+70*i
-          stage3.addChild(x);
+          if (x.parent !== stage3) stage3.addChild(x);
         });
       },
       renderStatic: function() {
         this.arr.forEach((x,i)=>{
           x.x= origin.x + 0;
           x.y= origin.y + 35 * (1 - this.arr.length) + 70 * i;
-          stage3.addChild(x);
+          if (x.parent !== stage3) stage3.addChild(x);
         })
       },
       removeFromStage: function(){ this.arr.forEach((x)=>{ stage3.removeChild(x); }); },
@@ -674,9 +791,61 @@ window.BCOriginalRenderer = function(API, params){
 
       refreshNetHud();
     }
+
     thisRenderer.drawBackground && initBackground();
     thisRenderer.showVertices && physicsState.vertices.forEach(initVertex);
+
+    // FIX FPS v2: contenedor cacheado para segmentos. Se crea acá
+    // (después del fondo, antes de names/players) para preservar el
+    // z-order original. Todos los segmentos se agregan adentro, y
+    // después de la última inserción, rasterizamos el contenedor a
+    // una RenderTexture con cacheAsTexture(). El resto de los frames
+    // el mapa entero es 1 solo draw call.
+    segmentsContainer = new Container();
+    stage2.addChild(segmentsContainer);
     physicsState.segments.forEach(initSegment);
+
+    // FIX (bug "desaparece el render tras varias partidas"):
+    // El cache a resolution 2 podía generar texturas de hasta
+    // 8190×8190 = 256 MB en una iGPU/GPU de gama baja. Después de
+    // varias partidas el pool de texturas fallaba la asignación, el
+    // primer render que reventaba abortaba el frame, y el canvas
+    // quedaba congelado mostrando solo lo último dibujado (el fondo).
+    //
+    // Estrategia nueva:
+    //  1. Capear la dimensión máxima a 2048 px lógicos (16 MB en RGBA
+    //     a resolution 1 — seguro incluso en iGPU vieja).
+    //  2. Bajar la resolution del cache a 1 si los bounds no entran
+    //     a resolution 2 dentro del cap.
+    //  3. Si aún así no entra, saltear el cache (más vale 50 draw
+    //     calls por frame que crashear la VRAM).
+    if (segmentsContainer.children.length > 0) {
+      try {
+        const b = segmentsContainer.getLocalBounds();
+        const MAX_TEX_DIM = 2048;
+
+        if (b.width > 0 && b.height > 0) {
+          let cacheRes = 2;
+          if (b.width * cacheRes > MAX_TEX_DIM || b.height * cacheRes > MAX_TEX_DIM) {
+            cacheRes = 1;
+          }
+          const fitsAtRes1 = b.width * cacheRes <= MAX_TEX_DIM && b.height * cacheRes <= MAX_TEX_DIM;
+
+          if (fitsAtRes1) {
+            segmentsContainer.cacheAsTexture({ resolution: cacheRes, antialias: false });
+          } else {
+            console.warn(
+              '[renderer] segment cache skipped: bounds',
+              Math.round(b.width) + 'x' + Math.round(b.height),
+              'exceden el cap de', MAX_TEX_DIM, 'px'
+            );
+          }
+        }
+      } catch (e) {
+        console.warn('[renderer] segment cache falló, sigo sin cache:', e.message);
+      }
+    }
+
     stage2.addChild(nameContainer);
     stage2.addChild(playerContainer);
     initHalo();
@@ -695,13 +864,39 @@ window.BCOriginalRenderer = function(API, params){
     thisRenderer.room && (typeof PIXI!="undefined") && regenerateNecessaryObjects(PIXI, thisRenderer.room);
   }
 
+  // FIX FPS v2: updateLocationIndicators ahora tiene un fast path.
+  // Antes llamaba a calculateLocationIndicatorValues() por cada jugador
+  // (que hace 4 compares + 2 subs + sqrt). Con 9 discos eran ~9 sqrts
+  // por frame. Ahora precomputamos los bounds del viewport UNA vez y
+  // chequeamos inline: si el disco está dentro, solo apagamos el
+  // indicador (visible=false) sin cálculos. La rama lenta (punto
+  // off-screen) cae al código original.
   function updateLocationIndicators(roomState, geo){
+    const halfW = geo.viewWidth * 0.5;
+    const halfH = geo.viewHeight * 0.5;
+    const left   = origin.x - halfW + 25;
+    const right  = origin.x + halfW - 25;
+    const top    = origin.y - halfH + 25 + geo.topPadding;
+    const bottom = origin.y + halfH - 25 - geo.bottomPadding;
+
     function updateLocationIndicator(id, disc){
       var gr = locationIndicatorInfo[id];
       if (!gr) return;
-      var vals = disc && calculateLocationIndicatorValues(disc.pos, geo);
+      if (!disc || !disc.pos) {
+        if (gr.visible) gr.visible = false;
+        return;
+      }
+      const p = disc.pos;
+      // Fast path: dentro del viewport → no hay indicador que mostrar.
+      // PIXI no re-toca el transform si gr.x/y/rotation/visible no
+      // cambian, así que este branch es prácticamente gratis.
+      if (p.x >= left && p.x <= right && p.y >= top && p.y <= bottom) {
+        if (gr.visible) gr.visible = false;
+        return;
+      }
+      var vals = calculateLocationIndicatorValues(p, geo);
       if (vals){ gr.x = vals.x; gr.y = vals.y; gr.rotation = vals.angle; gr.visible = true; }
-      else gr.visible = false;
+      else if (gr.visible) gr.visible = false;
     }
     updateLocationIndicator("ball", roomState.gameState.physicsState.discs[0]);
     roomState.players.forEach((player)=>updateLocationIndicator(player.id, player.disc));
@@ -779,8 +974,16 @@ window.BCOriginalRenderer = function(API, params){
     stage3.y = -origin.y;
   }
 
-  function update(roomState, geo){
+  // FIX FPS v2: `timeMs` viene como parámetro desde _doRender(). Antes
+  // el loop de discos llamaba a performance.now() por cada disco para
+  // el cálculo del kick glow. En una room de 8 jugadores eran 8 calls
+  // por frame, cada uno con overhead de syscall (~50ns en algunas
+  // plataformas). Ahora se calcula una vez y se pasa.
+  function update(roomState, geo, timeMs){
     const { discs, joints, segments } = roomState.gameState.physicsState;
+    if (!customDiscInfo) return;
+
+    _addMissingDiscInfos();
     if (!customDiscInfo) return;
 
     const {
@@ -795,6 +998,7 @@ window.BCOriginalRenderer = function(API, params){
     segments.forEach((segment, id)=>{
       if (!segment.vis) return;
       const segInfo = customSegmentInfo[id];
+      if (!segInfo) return;
       const gr = segInfo.gr;
       const pos1 = segment.v0.pos, pos2 = segment.v1.pos;
       const segmentTransparent = (segment.color|0)==-1;
@@ -839,6 +1043,8 @@ window.BCOriginalRenderer = function(API, params){
       }
 
       const player = roomState.getPlayer(disc.playerId);
+      if (!player) return;
+
       const { mask, playerStroke, kickGlow, avatarMask, avatarText, playerNameText, playerNameMask, cache } = discInfo;
       const radiusChanged = cache?.radius !== disc.radius;
 
@@ -854,6 +1060,12 @@ window.BCOriginalRenderer = function(API, params){
       const teamColors = showTeamColors ? roomState.teamColors[player.team.id] : defaultTeamColors[player.team.id];
 
       const usingTexture = !!playerAvatarTexturePath && player.id === followPlayerId;
+
+      if (discInfo.wasFollowPlayer !== usingTexture) {
+        discInfo.teamCache = null;
+        discInfo.wasFollowPlayer = usingTexture;
+      }
+
       if (usingTexture){
         if (avatarText.visible) avatarText.visible = false;
         if (avatarMask.visible) avatarMask.visible = false;
@@ -895,15 +1107,16 @@ window.BCOriginalRenderer = function(API, params){
       }
 
       const chatIndicator = chatIndicatorInfo[player.id];
-      if (chatIndicator.active && showChatIndicators){
-        chatIndicator.gr.x = pos.x;
-        chatIndicator.gr.y = pos.y-25;
-        chatIndicator.gr.visible = true;
-      } else {
-        chatIndicator.gr.visible = false;
+      if (chatIndicator) {
+        if (chatIndicator.active && showChatIndicators){
+          chatIndicator.gr.x = pos.x;
+          chatIndicator.gr.y = pos.y-25;
+          chatIndicator.gr.visible = true;
+        } else {
+          chatIndicator.gr.visible = false;
+        }
       }
 
-      // Detectar kick usando el ROOM REAL (el extrapolado no copia isKicking)
       let realKicking = false;
       try {
         const realRoom = thisRenderer.room;
@@ -916,14 +1129,6 @@ window.BCOriginalRenderer = function(API, params){
         }
       } catch(e){}
 
-      // --- Borde base (negro) + glow de kick (blanco) ---
-      //
-      // Antes: un solo Graphics que se redibujaba (clear + stroke) cada
-      // vez que cambiaba el color → al spamear X flickereaba a 60Hz.
-      //
-      // Ahora: dos Graphics separados. El negro se dibuja una vez (o
-      // cuando cambia el radio). El glow blanco tiene geometría fija
-      // y solo tocamos su .alpha por frame — barato y sin parpadeo.
       if (discInfo.strokeRadius !== disc.radius) {
         playerStroke.clear();
         kickGlow.clear();
@@ -939,9 +1144,10 @@ window.BCOriginalRenderer = function(API, params){
         discInfo.strokeRadius = disc.radius;
       }
 
-      const nowMs = performance.now();
-      if (realKicking) discInfo.kickHighlightUntil = nowMs + KICK_HIGHLIGHT_MS;
-      const glowRemaining = (discInfo.kickHighlightUntil || 0) - nowMs;
+      // FIX FPS v2: usar timeMs pasado desde _doRender en vez de
+      // performance.now() por disco.
+      if (realKicking) discInfo.kickHighlightUntil = timeMs + KICK_HIGHLIGHT_MS;
+      const glowRemaining = (discInfo.kickHighlightUntil || 0) - timeMs;
       kickGlow.alpha = glowRemaining > 0
         ? Math.min(1, glowRemaining / KICK_FADE_MS)
         : 0;
@@ -1003,13 +1209,23 @@ window.BCOriginalRenderer = function(API, params){
 
   var needsRecenter = false;
 
+  // FIX FPS v2: cachear el objeto de retorno para no allocar uno por
+  // frame. Los callers solo leen width/height.
   function resizeCanvas(){
     var { canvas } = params;
-    if (!canvas.parentElement) return { width: rendererObj.width, height: rendererObj.height };
+    if (!canvas.parentElement) {
+      _dims.width = rendererObj.width;
+      _dims.height = rendererObj.height;
+      return _dims;
+    }
 
-    var rect = canvas.parentElement.getBoundingClientRect();
-    var parentWidth = Math.round(rect.width);
-    var parentHeight = Math.round(rect.height);
+    if (_cachedParentW < 0) {
+      var rect = canvas.parentElement.getBoundingClientRect();
+      _cachedParentW = Math.round(rect.width);
+      _cachedParentH = Math.round(rect.height);
+    }
+    var parentWidth = _cachedParentW;
+    var parentHeight = _cachedParentH;
 
     var logicalWidth = parentWidth;
     var logicalHeight = parentHeight;
@@ -1050,18 +1266,20 @@ window.BCOriginalRenderer = function(API, params){
       if (changed && !needsRecenter) needsRecenter = true;
       else needsRecenter = false;
     }
-    return { width: logicalWidth, height: logicalHeight };
+    _dims.width = logicalWidth;
+    _dims.height = logicalHeight;
+    return _dims;
   }
 
   function updateHalo(roomState){
     var pos = roomState.getPlayer(thisRenderer.followPlayerId)?.disc?.pos;
-    if (thisRenderer.currentPlayerDistinction && pos){
+    if (thisRenderer.currentPlayerDistinction && pos && customHaloInfo){
       customHaloInfo.gr.x = pos.x;
       customHaloInfo.gr.y = pos.y;
       customHaloInfo.gr.visible = true;
       return;
     }
-    customHaloInfo.gr.visible = false;
+    if (customHaloInfo) customHaloInfo.gr.visible = false;
   };
 
   var NET_GRAPH_SAMPLES = 30;
@@ -1128,6 +1346,20 @@ window.BCOriginalRenderer = function(API, params){
     });
     if (bottomEl) this.resizeObserver.observe(bottomEl);
     else console.warn('[renderer] .chatbox-view no encontrado, bottomPaddingPx queda en 0');
+
+    var canvasParent = params.canvas.parentElement;
+    if (canvasParent) {
+      if (this._canvasParentObserver) {
+        try { this._canvasParentObserver.disconnect(); } catch(e){}
+      }
+      this._canvasParentObserver = new ResizeObserver(function(entries){
+        var r = entries[0].contentRect;
+        _cachedParentW = Math.round(r.width);
+        _cachedParentH = Math.round(r.height);
+      });
+      this._canvasParentObserver.observe(canvasParent);
+    }
+
     if (thisRenderer.room) thisRenderer.room.onPingChange = handleNetPingChange;
 
     function loadScript(src, onload){
@@ -1147,10 +1379,6 @@ window.BCOriginalRenderer = function(API, params){
     async function createRenderer(){
       const wantsWebGPU = thisRenderer.webGPU && await isWebGPUSupported();
 
-      // PERF: antialias/FXAA apagados por default -- en el juego real
-      // los bordes duros no se notan y esto ahorra fill-rate en GPUs
-      // medias/bajas. Si alguien lo quiere prendido (pantallas grandes,
-      // GPU potente) puede togglearlo desde thisRenderer.antialias.
       const wantsAA = !!thisRenderer.antialias;
       const rendererOptions = {
         view: params.canvas,
@@ -1158,7 +1386,7 @@ window.BCOriginalRenderer = function(API, params){
         resolution: window.devicePixelRatio * thisRenderer.resolutionScale,
         autoDensity: false,
         backgroundColor: "#1099bb",
-        forceFXAA: wantsAA,
+        forceFXAA: false,
         legacy: false,
         powerPreference: "high-performance",
       };
@@ -1192,6 +1420,7 @@ window.BCOriginalRenderer = function(API, params){
     netHistory = [];
     netMedianPing = 0;
     netMaxPingValue = 0;
+    _stopCustomLoop();
     stage?.destroy(true);
     stage2?.destroy(true);
     stage3?.destroy(true);
@@ -1202,6 +1431,7 @@ window.BCOriginalRenderer = function(API, params){
     stage = null;
     stage2 = null;
     stage3 = null;
+    segmentsContainer = null;
     texture1?.destroy(true);
     texture2?.destroy(true);
     texture3?.destroy(true);
@@ -1217,51 +1447,61 @@ window.BCOriginalRenderer = function(API, params){
     textInfo = null;
     locationIndicatorInfo = null;
     chatIndicatorInfo = null;
-    _stopCustomLoop();
     thisRenderer.resizeObserver?.disconnect();
     thisRenderer.resizeObserver = null;
+    if (this._canvasParentObserver) {
+      try { this._canvasParentObserver.disconnect(); } catch(e){}
+      this._canvasParentObserver = null;
+    }
   };
 
-  var customLoopId = null;
-  var renderFromCustomLoop = false;
-  const RenderResult = { skipped: 0, rendered: 1, blocked: 2 };
+  // ============================================================
+  // RENDER LOOP (rAF-driven)
+  // ============================================================
 
-  function _resetFrameThrottleState() {
-    framesInFlight = 0;
-    renderBlockedByGPU = false;
-    forceImmediateRender = false;
-    messagePending = false;
-    rendererLifecycleToken++;
-  }
+  let rafId = null;
+  let isLoopRunning = false;
+  let lastFrameTime = 0;
+  let cachedFrameInterval = 0;
+  let cachedTargetFPS = -1;
+  let renderFromCustomLoop = false;
 
-  function _resolveFrameCompletion(token) {
-    if (token !== rendererLifecycleToken) return;
-    framesInFlight = Math.max(0, framesInFlight - 1);
-    if (renderBlockedByGPU && isLoopRunning) {
-      renderBlockedByGPU = false;
-      messageChannel.port2.postMessage(null);
-    }
-  }
-
-  function _trackSubmittedFrame(queue) {
-    framesInFlight++;
-    const token = rendererLifecycleToken;
-    queue.onSubmittedWorkDone().then(
-      ()=>_resolveFrameCompletion(token),
-      ()=>_resolveFrameCompletion(token)
-    );
-  }
-
-  function _getGPUQueue() { return rendererObj?.gpu?.device?.queue; }
+  const RenderResult = { skipped: 0, rendered: 1 };
 
   function _doRender() {
+    // FIX (bug "desaparece el render tras varias partidas"):
+    // Race condition entre onGameStart y la población de gameState.
+    // Si onGameStart dispara antes de que el room tenga gameState
+    // completo, regenerateNecessaryObjects sale por early-return y
+    // nada vuelve a pedirle que se regenere. Resultado: stage queda
+    // en null, _doRender retorna skipped en cada frame, y el canvas
+    // queda congelado en el último frame (que suele ser solo el
+    // fondo, sin discos ni overlay custom).
+    //
+    // Este bloque auto-recupera: si no hay stage pero el room SÍ
+    // tiene gameState, forzamos la regeneración. Es defensivo y no
+    // cuesta nada cuando todo va bien (stage nunca es null).
+    if (!stage) {
+      if (_regenerateAttemptedThisFrame) {
+        // Ya intentamos en este frame y no sirvió. No insistir.
+        return RenderResult.skipped;
+      }
+      const room = thisRenderer.room;
+      if (room && room.state && room.state.gameState && typeof PIXI !== 'undefined') {
+        _regenerateAttemptedThisFrame = true;
+        try {
+          regenerateNecessaryObjects(PIXI, room);
+        } catch (e) {
+          console.warn('[renderer] auto-regen falló:', e && e.message);
+        }
+      } else {
+        return RenderResult.skipped;
+      }
+    }
+
     if (!stage || !stage2 || !stage3) return RenderResult.skipped;
     if (!params.paintGame || !rendererObj) return RenderResult.skipped;
-    const queue = _getGPUQueue();
-    if (queue?.onSubmittedWorkDone && framesInFlight >= maxFramesInFlight) {
-      renderBlockedByGPU = true;
-      return RenderResult.blocked;
-    }
+
     var extrapolatedRoomState = thisRenderer.room.extrapolate(thisRenderer.extrapolation, true);
     if (!extrapolatedRoomState.gameState) return RenderResult.skipped;
 
@@ -1269,22 +1509,25 @@ window.BCOriginalRenderer = function(API, params){
     const currentWidth = currentDims.width;
     const currentHeight = currentDims.height;
 
+    // FIX FPS v2: performance.now() una vez por frame, se pasa a
+    // update() para el cálculo de kick glow en cada disco.
     var time = window.performance.now();
-    spf = (time-lastRenderTime)/1000;
-    var followPlayer = extrapolatedRoomState.getPlayer(thisRenderer.followPlayerId), followDisc = followPlayer?.disc;
+    spf = (time - lastRenderTime) / 1000;
+    var followPlayer = extrapolatedRoomState.getPlayer(thisRenderer.followPlayerId),
+        followDisc = followPlayer?.disc;
 
     var stadium = extrapolatedRoomState.gameState.stadium;
-    var maxViewWidth = 2*stadium.width+100;
+    var maxViewWidth = 2 * stadium.width + 100;
     var zoomCoeff = thisRenderer.zoomCoeff;
-    if (currentWidth/zoomCoeff > maxViewWidth){ zoomCoeff = currentWidth/maxViewWidth; }
-    var viewWidth = currentWidth/zoomCoeff;
-    var viewHeight = currentHeight/zoomCoeff;
+    if (currentWidth / zoomCoeff > maxViewWidth) { zoomCoeff = currentWidth / maxViewWidth; }
+    var viewWidth = currentWidth / zoomCoeff;
+    var viewHeight = currentHeight / zoomCoeff;
     var geo = computeViewportGeometry(stadium, viewWidth, viewHeight, zoomCoeff);
 
     lastRenderTime = time;
     updateCameraOrigin(extrapolatedRoomState.gameState, followDisc, geo, spf);
-    update(extrapolatedRoomState, geo);
-    if (extrapolatedRoomState.gameState.pauseGameTickCounter<=0){
+    update(extrapolatedRoomState, geo, time);
+    if (extrapolatedRoomState.gameState.pauseGameTickCounter <= 0) {
       updateText(spf);
       renderText();
     }
@@ -1312,108 +1555,50 @@ window.BCOriginalRenderer = function(API, params){
         inputLagRollingCount = 0;
       }
     }
-    rendererObj.render({container: stage});
-    if (queue?.onSubmittedWorkDone) {
-      renderBlockedByGPU = false;
-      _trackSubmittedFrame(queue);
-    }
+
+    rendererObj.render({ container: stage });
     params.onRequestAnimationFrame?.(extrapolatedRoomState);
     return RenderResult.rendered;
   }
 
-  var messageChannel = null;
-  var isLoopRunning = false;
-  var targetFrameTime = 0;
-  var messagePending = false;
+  function _loop(now) {
+  if (!isLoopRunning) { rafId = null; return; }
+  rafId = requestAnimationFrame(_loop);
 
-  function _postToLoop() {
-    if (messagePending) return;
-    if (!messageChannel) return;
-    messagePending = true;
-    try { messageChannel.port2.postMessage(null); } catch(e) { messagePending = false; }
-  }
-
-  async function _onMessageChannelTick() {
-    messagePending = false;
-    if (!isLoopRunning) return;
-    if (customLoopId != null) { clearTimeout(customLoopId); customLoopId = null; }
-
-    var now = performance.now();
-    const bypassFrameLimit = forceImmediateRender;
-
-    if (thisRenderer.targetFPS > 0 && !bypassFrameLimit) {
-      if (now < targetFrameTime) {
-        var remaining = targetFrameTime - now;
-        if (remaining > 5) {
-          customLoopId = setTimeout(() => { if (isLoopRunning) _postToLoop(); }, remaining - 2);
-        } else {
-          _postToLoop();
-        }
-        return;
-      }
-      targetFrameTime = Math.max(now, targetFrameTime + 1000 / thisRenderer.targetFPS);
-    }
-
-    renderFromCustomLoop = true;
+  renderFromCustomLoop = true;
+  _regenerateAttemptedThisFrame = false;
+  try {
     thisRenderer.room._flushPendingKeyState?.();
-    const renderResult = _doRender();
+    _doRender();
+  } catch (e) {
+    console.warn('[renderer] tick:', e && e.message, e && e.stack);
+  } finally {
     renderFromCustomLoop = false;
-    if (renderResult === RenderResult.rendered) {
-      forceImmediateRender = false;
-      if (thisRenderer.targetFPS > 0 && bypassFrameLimit)
-        targetFrameTime = now + 1000 / thisRenderer.targetFPS;
-    }
-    if (renderResult === RenderResult.blocked) return;
-
-    _postToLoop();
   }
-
-  function _scheduleNextTick() {
-    if (!isLoopRunning) return;
-    targetFrameTime = performance.now();
-    _postToLoop();
-  }
-
-  function _customRenderTick() { _scheduleNextTick(); }
-
-  function _requestImmediateRender() {
-    if (!isLoopRunning) return;
-    forceImmediateRender = true;
-    if (customLoopId != null) { clearTimeout(customLoopId); customLoopId = null; }
-    _postToLoop();
-  }
+}
 
   function _startCustomLoop() {
     if (isLoopRunning) return;
-    if (messageChannel) {
-      try { messageChannel.port1.close(); } catch(e){}
-      try { messageChannel.port2.close(); } catch(e){}
-    }
-    messageChannel = new MessageChannel();
-    messageChannel.port1.onmessage = _onMessageChannelTick;
-    _resetFrameThrottleState();
     isLoopRunning = true;
-    _scheduleNextTick();
+    lastFrameTime = 0;
+    cachedTargetFPS = -1;
+    rafId = requestAnimationFrame(_loop);
   }
 
   function _stopCustomLoop() {
     isLoopRunning = false;
-    _resetFrameThrottleState();
-    if (customLoopId != null) { clearTimeout(customLoopId); customLoopId = null; }
-    if (messageChannel) {
-      try { messageChannel.port1.close(); } catch(e){}
-      try { messageChannel.port2.close(); } catch(e){}
-      messageChannel = null;
-    }
-    messagePending = false;
+    if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+    lastFrameTime = 0;
+    cachedTargetFPS = -1;
   }
 
-  this.render = function(){
+  this.render = function () {
     if (isLoopRunning && !renderFromCustomLoop) return;
+    _regenerateAttemptedThisFrame = false;
     _doRender();
   };
 
-  this.requestImmediateRender = function() { _requestImmediateRender(); };
+  this.requestImmediateRender = function () {};
 
   var _origInitialize = this.initialize;
   this.initialize = function() {
@@ -1437,7 +1622,7 @@ window.BCOriginalRenderer = function(API, params){
   };
 
   this.onPlayerLeave = function (playerObj, reason, isBanned, byId, customData) {
-    _removeDiscByPlayerId(playerObj.id);
+    if (!playerObj || typeof playerObj.id !== 'number') return;
     _removeChatIndicatorForPlayer(playerObj.id);
     _removeLocationIndicatorForPlayer(playerObj.id);
   };
@@ -1468,7 +1653,8 @@ window.BCOriginalRenderer = function(API, params){
         for (let i=0;i<discs.length;i++){
           if (discs[i].playerId!==null && discs[i].playerId!==undefined){
             const playerObj = thisRenderer.room.getPlayer(discs[i].playerId);
-            const discInfo = customDiscInfo[i];
+            const discInfo = customDiscInfo && customDiscInfo[i];
+            if (!discInfo || !playerObj) continue;
             var teamColors = thisRenderer.showTeamColors ? thisRenderer.room.state.teamColors[playerObj.team.id] : defaultTeamColors[playerObj.team.id];
             redrawPlayerDisc(discInfo, teamColors, playerObj.disc, playerObj);
           }
@@ -1478,9 +1664,14 @@ window.BCOriginalRenderer = function(API, params){
       case "drawBackground":
       case "showInvisibleSegments":
       case "showVertices":
+        _regenerateNecessaryObjects();
+        break;
       case "generalLineWidth":
       case "discLineWidth":
-        _regenerateNecessaryObjects();
+        clearTimeout(thisRenderer._lineWidthDebounce);
+        thisRenderer._lineWidthDebounce = setTimeout(() => {
+          _regenerateNecessaryObjects();
+        }, 150);
         break;
       case "showFPS": if (fpsText) fpsText.visible = newValue; break;
       case "showInputLag": if (inputLagText) inputLagText.visible = newValue; break;
@@ -1507,7 +1698,29 @@ window.BCOriginalRenderer = function(API, params){
 
   this.onGameStart = function(byId, customData){ _regenerateNecessaryObjects(); resetTexts(); };
   this.onGameEnd = function(winningTeamId, customData){ addText((winningTeamId==Team.red.id) ? textInfo.redVictory : textInfo.blueVictory); };
-  this.onGameStop = function(winningTeamId, customData){ stage?.destroy(); stage = null; customDiscInfo = null; customJointInfo = null; };
+  this.onGameStop = function(winningTeamId, customData){
+    try { if (stage2 && !stage2.destroyed) stage2.destroy({ children: true }); } catch (e) {}
+    try { if (stage3 && !stage3.destroyed) stage3.destroy({ children: true }); } catch (e) {}
+    try { if (stage  && !stage.destroyed)  stage.destroy({ children: true });  } catch (e) {}
+    stage = null;
+    stage2 = null;
+    stage3 = null;
+    segmentsContainer = null;
+    playerContainer = null;
+    nameContainer = null;
+    haloContainer = null;
+    customDiscInfo = null;
+    customJointInfo = null;
+    customSegmentInfo = null;
+    customHaloInfo = null;
+    textInfo = null;
+    locationIndicatorInfo = {};
+    chatIndicatorInfo = {};
+    pauseRect = null;
+    // Reset del flag para que el próximo onGameStart / _doRender
+    // pueda volver a intentar regenerar.
+    _regenerateAttemptedThisFrame = false;
+  };
   this.onTimeIsUp = function(customData){ addText(textInfo.timeUp); };
 
   this.zoomIn = function(pixelCoordX, pixelCoordY, zoomCoeff){
@@ -1598,7 +1811,6 @@ window.BCOriginalRenderer = function(API, params){
     gamePaused = snapshot.gamePaused;
   };
 
-  // Hooks para customizer.js
   this.bc = {
     getStage:               () => stage,
     getStage2:              () => stage2,
@@ -1609,10 +1821,6 @@ window.BCOriginalRenderer = function(API, params){
     getOrigin:              () => origin,
     getScale:               () => scale,
     getPixi:                () => (typeof PIXI !== 'undefined' ? PIXI : null),
-    // Fuerza el redibujo del fondo (césped) cuando cambia el flag.
-    // Sin esto, el customizer setea `drawBackground` pero el stage
-    // ya está construido y el cambio no se ve hasta el próximo
-    // cambio de mapa / gol.
     setDrawBackground: (v) => {
       if (thisRenderer.drawBackground !== v) {
         thisRenderer.drawBackground = v;

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, session, safeStorage } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, session, safeStorage, screen } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -53,12 +53,24 @@ if (!config.clientId) {
 }
 
 if (config.softwareRendering) {
-  app.disableHardwareAcceleration()
-  app.commandLine.appendSwitch('disable-gpu')
-  app.commandLine.appendSwitch('disable-gpu-compositing')
-  app.commandLine.appendSwitch('disable-gpu-sandbox')
-  app.commandLine.appendSwitch('disable-accelerated-2d-canvas')
-  app.commandLine.appendSwitch('disable-2d-canvas-clip-aa')
+  // [FIX FPS v0.2.8] Antes esto era "modo compatible" = apagar la GPU
+  // entera (disable-gpu + disable-gpu-compositing + disable-accelerated-
+  // 2d-canvas). Eso deja TODO por CPU: el WebGL del juego, el compositor
+  // de la ventana, el canvas 2D del launcher... en una PC vieja eso es
+  // literalmente lo que producía 1-2 FPS. La compositing GPU (mover/
+  // dibujar la ventana) casi nunca es lo que crashea; lo que suele
+  // fallar en iGPUs viejas es el contexto WebGL puntual. Con SwiftShader
+  // (rasterizador WebGL 100% software pero OPTIMIZADO para eso, mucho
+  // más rápido que "todo por CPU a mano") el juego sigue andando por
+  // software SOLO donde hace falta, y la ventana/UI del launcher siguen
+  // aceleradas por GPU. Resultado: mismo nivel de "compatibilidad" que
+  // antes, pero sin tirar el resto del rendimiento a la basura.
+  app.commandLine.appendSwitch('use-gl', 'swiftshader')
+  app.commandLine.appendSwitch('enable-unsafe-swiftshader')
+  app.commandLine.appendSwitch('ignore-gpu-blocklist')
+  app.commandLine.appendSwitch('disable-background-timer-throttling')
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 } else {
   // FIX FPS: nada de esto estaba seteado. Sin "disable-background-timer-throttling"
   // en particular, Chromium le baja los timers a ~1Hz al proceso apenas pierde foco
@@ -69,13 +81,27 @@ if (config.softwareRendering) {
   app.commandLine.appendSwitch('disable-background-timer-throttling')
   app.commandLine.appendSwitch('disable-renderer-backgrounding')
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
-  // [FIX FPS 2] En iGPUs Intel viejas (i3 de PC de gobierno) el vsync del
-  // compositor clava el juego a 60fps aunque el motor pinte más rápido, y a
-  // veces ANGLE elige un backend (D3D11) más lento que OpenGL puro sobre esas
-  // GPUs. Estos switches sacan ese techo. Si en algún equipo puntual se ve
-  // tearing o inestabilidad, son los primeros candidatos a sacar.
-  app.commandLine.appendSwitch('disable-frame-rate-limit')
-  app.commandLine.appendSwitch('disable-gpu-vsync')
+  // [FIX #141] Windows: Chromium tiene una optimización ("Native Window
+  // Occlusion") que detecta cuándo otra ventana tapa la nuestra y baja
+  // los timers al mínimo. Con el game view abierto, cualquier diálogo
+  // del sistema (Discord, notificaciones de Windows, alt-tab) hace que
+  // Chromium marque la ventana como "occluded" y el rAF del juego se
+  // frena. Los switches de arriba previenen el throttling por background
+  // pero NO esta feature específica. Desactivarla solo en Windows; en
+  // Linux/Mac no existe.
+  if (process.platform === 'win32') {
+    app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+  }
+  // [FIX FPS 3] Los switches "disable-frame-rate-limit" / "disable-gpu-vsync"
+  // que estaban ahi sacan el techo de 60fps en iGPUs viejas, PERO tambien
+  // desactivan el vsync del compositor para TODOS los usuarios, no solo esas
+  // maquinas puntuales. Sin vsync, los frames se presentan apenas estan
+  // listos en vez de alinearse con el refresco real del monitor -> eso es
+  // tearing y "frames salteados" aunque el contador diga un numero alto.
+  // Los sacamos: el renderer ya tiene su propio cap (targetFPS en
+  // renderer.js/game.js) que evita el techo de 60 sin tener que romper el
+  // vsync global. Si en algun equipo puntual hace falta lo de antes,
+  // conviene que sea un toggle en Ajustes, no algo prendido para todos.
   app.commandLine.appendSwitch('use-angle', 'gl')
 }
 
@@ -242,8 +268,7 @@ function createWindow() {
     webPreferences.webSecurity = true
     webPreferences.allowRunningInsecureContent = false
     webPreferences.experimentalFeatures = false
-    webPreferences.experimentalFeatures = false
-    webPreferences.backgroundThrottling = false   // ← agregar esta línea
+    webPreferences.backgroundThrottling = false
   })
 
   win.webContents.on('did-attach-webview', (event, wc) => {
@@ -270,6 +295,24 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // [FIX FPS v0.2.8] Antes, una vez que _gpuCrashes llegaba a 2 y se
+  // activaba softwareRendering, quedaba prendido PARA SIEMPRE aunque el
+  // usuario haya actualizado drivers o el crash haya sido un evento
+  // aislado (ej: se durmió la PC con el juego abierto). Si esta sesión
+  // arranca entera sin que el GPU process se caiga, después de un ratito
+  // de uso real bajamos el contador de crashes para que eventualmente
+  // se pueda volver a intentar con GPU. No lo sacamos del modo compatible
+  // en caliente (cambiar flags de Chromium a mitad de sesión no sirve),
+  // solo evitamos que un crash viejo condene todos los arranques futuros.
+  if (config._gpuCrashes) {
+    setTimeout(() => {
+      // 30s sin crash = el arranque fue sano, no arrastramos
+      // crashes de sesiones anteriores.
+      config._gpuCrashes = 0
+      saveConfig()
+    }, 30 * 1000)
+  }
+
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
     const ALLOWED = ['geolocation', 'media', 'clipboard-read', 'clipboard-write']
     callback(ALLOWED.includes(permission))
@@ -472,6 +515,13 @@ function setupAdBlocking() {
 
 app.on('child-process-gone', (event, details) => {
   if (details.type !== 'GPU') return
+
+  // clean-exit = terminó normalmente (típico al cerrar la app).
+  // NO es un crash. Contarlo como tal hacía que, tras 2 cierres
+  // normales, se activara softwareRendering y el juego cayera a
+  // 1-2 FPS por swiftshader.
+  if (details.reason === 'clean-exit') return
+
   log.error('[main] Se cayó el proceso de GPU:', details.reason, details.exitCode)
   config._gpuCrashes = (config._gpuCrashes || 0) + 1
   saveConfig()
@@ -532,6 +582,23 @@ ipcMain.on('relaunch-app', () => {
 })
 
 ipcMain.handle('get-client-id', () => config.clientId)
+
+// [FIX FPS v0.2.8] El renderer del juego no tenía forma de saber los Hz
+// reales del monitor: usaba un cap fijo de 144 para todo el mundo. En un
+// monitor de 60Hz eso no cambia nada (el rAF igual lo frena), pero en
+// uno de 75/100/165/240Hz el juego se quedaba corto y "no aprovechaba"
+// el monitor. Con esto el cliente pregunta el refresh real de la
+// pantalla donde está la ventana y usa ESE como default.
+ipcMain.handle('get-display-hz', () => {
+  try {
+    const display = screen.getDisplayNearestPoint(win ? win.getBounds() : { x: 0, y: 0 })
+    const hz = display && display.displayFrequency
+    return (hz && hz > 0) ? Math.round(hz) : 60
+  } catch (e) {
+    return 60
+  }
+})
+
 ipcMain.handle('get-software-rendering', () => !!config.softwareRendering)
 ipcMain.handle('set-software-rendering', (event, enabled) => {
   config.softwareRendering = !!enabled
@@ -657,6 +724,24 @@ function validateClientId(id) {
   return { ok: true, value: trimmed }
 }
 
+// FIX #167: fetch con timeout. Sin esto, si Discord/Spotify no responden
+// (API lenta, red caída, DNS colgado), los handlers de OAuth y
+// spotify:state quedan esperando para siempre: el server local sigue
+// escuchando en el puerto (bloqueando reintentos), el renderer nunca
+// recibe la respuesta, y el usuario no ve ningún error. Con AbortSignal
+// forzamos un timeout real y liberamos el puerto.
+// Node 18+ (Electron 32 ya lo trae), así que AbortController + setTimeout
+// funciona sin polyfills.
+async function fetchWithTimeout(url, opts = {}, timeoutMs = 15000) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(url, Object.assign({}, opts, { signal: controller.signal }))
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 // ============================================================
 // DISCORD OAUTH
 // ============================================================
@@ -718,19 +803,27 @@ async function discordStartLogin(clientId) {
         if (returnedState !== state) { res.writeHead(400); res.end(oauthResultHtml('BahiaClient — Discord', 'Estado inválido.', false, '#7289da')); finish(false, { error: 'bad_state' }); return }
         let tokenData
         try {
-          const tokenRes = await fetch(DISCORD_API + '/oauth2/token', {
+          const tokenRes = await fetchWithTimeout(DISCORD_API + '/oauth2/token', {
             method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({ client_id: v.value, grant_type: 'authorization_code', code, redirect_uri: DISCORD_REDIRECT_URI, code_verifier: codeVerifier }).toString(),
-          })
+          }, 15000)
           if (!tokenRes.ok) { res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Discord', 'No se pudo canjear el código.', false, '#7289da')); finish(false, { error: 'token_exchange_failed' }); return }
           tokenData = await tokenRes.json()
-        } catch (e) { res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Discord', 'No se pudo contactar a Discord.', false, '#7289da')); finish(false, { error: 'network' }); return }
+        } catch (e) {
+          const isTimeout = e && e.name === 'AbortError'
+          res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Discord', isTimeout ? 'Discord tardó demasiado en responder.' : 'No se pudo contactar a Discord.', false, '#7289da'))
+          finish(false, { error: isTimeout ? 'timeout' : 'network' }); return
+        }
         let user
         try {
-          const userRes = await fetch(DISCORD_API + '/users/@me', { headers: { Authorization: 'Bearer ' + tokenData.access_token } })
+          const userRes = await fetchWithTimeout(DISCORD_API + '/users/@me', { headers: { Authorization: 'Bearer ' + tokenData.access_token } }, 10000)
           if (!userRes.ok) { res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Discord', 'No se pudo leer tu perfil.', false, '#7289da')); finish(false, { error: 'user_fetch_failed' }); return }
           user = await userRes.json()
-        } catch (e) { res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Discord', 'No se pudo contactar a Discord.', false, '#7289da')); finish(false, { error: 'network' }); return }
+        } catch (e) {
+          const isTimeout = e && e.name === 'AbortError'
+          res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Discord', isTimeout ? 'Discord tardó demasiado en responder.' : 'No se pudo contactar a Discord.', false, '#7289da'))
+          finish(false, { error: isTimeout ? 'timeout' : 'network' }); return
+        }
         res.writeHead(200, {'Content-Type':'text/html; charset=utf-8'}); res.end(oauthResultHtml('BahiaClient — Discord', `¡Listo, ${user.username}!`, true, '#7289da'))
         finish(true, { user })
       } catch (e) { try { res.writeHead(500); res.end('error') } catch (_) {} finish(false, { error: 'handler_error' }) }
@@ -817,15 +910,19 @@ async function spotifyStartLogin(clientId) {
         if (returnedState !== state) { res.writeHead(400); res.end(oauthResultHtml('BahiaClient — Spotify', 'Estado inválido.', false, '#1db954')); finish(false, { error: 'bad_state' }); return }
         let tokenData
         try {
-          const tokenRes = await fetch(SPOTIFY_TOKEN_URL, {
+          const tokenRes = await fetchWithTimeout(SPOTIFY_TOKEN_URL, {
             method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({ client_id: v.value, grant_type: 'authorization_code', code, redirect_uri: SPOTIFY_REDIRECT_URI, code_verifier: codeVerifier }).toString(),
-          })
+          }, 15000)
           if (!tokenRes.ok) { res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Spotify', 'No se pudo canjear el código.', false, '#1db954')); finish(false, { error: 'token_exchange_failed' }); return }
           tokenData = await tokenRes.json()
-        } catch (e) { res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Spotify', 'No se pudo contactar a Spotify.', false, '#1db954')); finish(false, { error: 'network' }); return }
+        } catch (e) {
+          const isTimeout = e && e.name === 'AbortError'
+          res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Spotify', isTimeout ? 'Spotify tardó demasiado en responder.' : 'No se pudo contactar a Spotify.', false, '#1db954'))
+          finish(false, { error: isTimeout ? 'timeout' : 'network' }); return
+        }
         let user = null
-        try { const userRes = await fetch(SPOTIFY_API + '/me', { headers: { Authorization: 'Bearer ' + tokenData.access_token } }); if (userRes.ok) user = await userRes.json() } catch (e) {}
+        try { const userRes = await fetchWithTimeout(SPOTIFY_API + '/me', { headers: { Authorization: 'Bearer ' + tokenData.access_token } }, 10000); if (userRes.ok) user = await userRes.json() } catch (e) {}
         res.writeHead(200); res.end(oauthResultHtml('BahiaClient — Spotify', '¡Listo!', true, '#1db954'))
         finish(true, { tokens: tokenData, user })
       } catch (e) { try { res.writeHead(500); res.end('error') } catch (_) {} finish(false, { error: 'handler_error' }) }
@@ -851,10 +948,10 @@ async function spotifyEnsureToken() {
     return decryptSecret(s.accessToken)
   }
   try {
-    const res = await fetch(SPOTIFY_TOKEN_URL, {
+    const res = await fetchWithTimeout(SPOTIFY_TOKEN_URL, {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: config.spotifyClientId || '' }).toString(),
-    })
+    }, 10000)
     if (!res.ok) {
       if (res.status === 400 || res.status === 401) {
         delete config.spotify
@@ -879,7 +976,7 @@ async function spotifyApiCall(method, path, body) {
   try {
     const opts = { method, headers: { Authorization: 'Bearer ' + token } }
     if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body) }
-    const res = await fetch(SPOTIFY_API + path, opts)
+    const res = await fetchWithTimeout(SPOTIFY_API + path, opts, 10000)
     if (res.status === 204 || res.status === 200) return { ok: true, status: res.status }
     if (res.status === 403) return { ok: false, error: 'premium_required', status: 403 }
     if (res.status === 404) return { ok: false, error: 'no_active_device', status: 404 }
@@ -920,7 +1017,7 @@ ipcMain.handle('spotify:state', async () => {
   if (!token) return { ok: false, error: 'no_token' }
   let result
   try {
-    const res = await fetch(SPOTIFY_API + '/me/player', { headers: { Authorization: 'Bearer ' + token } })
+    const res = await fetchWithTimeout(SPOTIFY_API + '/me/player', { headers: { Authorization: 'Bearer ' + token } }, 8000)
     if (res.status === 204) result = { ok: true, state: null }
     else if (res.status === 403) result = { ok: false, error: 'premium_required' }
     else if (res.status === 401) {
@@ -1059,7 +1156,14 @@ function openSocialStream(playerId) {
   try { u = new URL(target) } catch (e) { return { ok: false, error: 'bad_backend_url' } }
   const transport = u.protocol === 'https:' ? https : http
 
-  const req = transport.get({
+  // FIX #42: forzar IPv4 en DNS lookup. `dns.lookup` sin family puede
+  // devolver IPv6 primero (según el orden del resolver del sistema),
+  // y si el backend (NUC en la LAN) solo escucha en IPv4, la conexión
+  // cuelga hasta el timeout o tira ECONNREFUSED. Igual chequeamos si
+  // el hostname es un literal IPv6 (empieza con `[`) para no romper
+  // ese caso.
+  const isIPv6Literal = u.hostname.startsWith('[')
+  const reqOpts = {
     hostname: u.hostname,
     port: u.port || (u.protocol === 'https:' ? 443 : 80),
     path: u.pathname + u.search,
@@ -1069,7 +1173,10 @@ function openSocialStream(playerId) {
       'Cache-Control': 'no-cache',
       'x-bc-key': key,
     },
-  }, (res) => {
+  }
+  if (!isIPv6Literal) reqOpts.family = 4
+
+  const req = transport.get(reqOpts, (res) => {
     if (res.statusCode !== 200) {
       log.warn(`[social] SSE status ${res.statusCode}, reintentando`)
       res.resume()

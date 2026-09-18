@@ -1,6 +1,6 @@
 {
   "name": "bahiaclient",
-  "version": "0.2.5",
+  "version": "0.2.9",
   "description": "BahiaClient — cliente personalizado de HaxBall",
   "main": "main.js",
   "author": "Joaco",
@@ -42,6 +42,7 @@
       "publisherName": "Joaco",
       "legalTrademarks": "BahiaClient",
       "requestedExecutionLevel": "asInvoker",
+      "verifyUpdateCodeSignature": false,
       "publish": [
         {
           "provider": "github",

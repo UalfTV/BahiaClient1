@@ -22,9 +22,19 @@ window.BCGameEvents = window.BCGameEvents || {
 
   var AUTH_KEY = 'bc_haxball_auth';
 
+  // FIX #21 + #63: getParam envuelve decodeURIComponent en try/catch
+  // (antes un % mal formado en el URL tiraba URIError y rompía la
+  // carga entera del game view, quedando en blanco). El regex ahora
+  // es case-insensitive para que ?ROOMID= también matchee.
   function getParam(name) {
-    var m = new RegExp('[?&]' + name + '=([^&]+)').exec(location.search);
-    return m ? decodeURIComponent(m[1]) : null;
+    var m = new RegExp('[?&]' + name + '=([^&]+)', 'i').exec(location.search);
+    if (!m) return null;
+    try {
+      return decodeURIComponent(m[1]);
+    } catch (e) {
+      console.warn('[game] getParam decode falló para', name, ':', e.message);
+      return m[1]; // fallback: devolver el valor crudo sin decodear
+    }
   }
 
   var roomId = getParam('roomId');
@@ -725,7 +735,7 @@ window.BCGameEvents = window.BCGameEvents || {
     } else if (els.pBtn) els.pBtn.textContent = 'Pause';
   }
 
-    function updateScoreboard(room) {
+  function updateScoreboard(room) {
     if (!room) return;
     const gs = room.state && room.state.gameState;
     if (!gs) return;
@@ -743,12 +753,7 @@ window.BCGameEvents = window.BCGameEvents || {
     if (bEl && bEl.textContent !== String(blueScore)) bEl.textContent = String(blueScore);
 
     // HaxBall: el cronómetro CUENTA HACIA ARRIBA desde 00:00 hasta timeLimit.
-    // FIX: el campo real de la clase GameState de node-haxball es
-    // `timeElapsed`, NO `time` (ese campo no existe -> siempre undefined
-    // -> el reloj quedaba pegado en 00:00). Además ya viene en SEGUNDOS
-    // como float (se incrementa 1/60 por tick), no en milisegundos.
-    // Confirmado contra el mapeo de propiedades de la clase en api.js:
-    // ["ext","pauseGameTickCounter","timeElapsed","blueScore","redScore", ...]
+    // gs.timeElapsed viene en SEGUNDOS como float.
     const totalSecs = Math.floor((typeof gs.timeElapsed === 'number') ? gs.timeElapsed : 0);
 
     const mm = String(Math.floor(totalSecs / 60)).padStart(2, '0');
@@ -1275,9 +1280,7 @@ window.BCGameEvents = window.BCGameEvents || {
   });
 
   var SETTINGS_KEY = 'bc_game_settings_v1';
-  // FIX #2: zoom en % (100 = 1.0x). Antes era 100, que pisaba el 2.6
-  // inicial del renderer en applySettings(). Ahora 260 = 2.6x.
-  var defaultSettings = { volume: 35, zoom: 260, quality: 100, showFps: false, showPing: false, chatOpacity: 45, chatFontSize: 14 };
+  var defaultSettings = { volume: 35, zoom: 260, quality: 100, showFps: false, showPing: false, chatOpacity: 45, chatFontSize: 14, fpsLimit: 0, autoQuality: true };
 
   function loadSettings() {
     try {
@@ -1324,18 +1327,109 @@ window.BCGameEvents = window.BCGameEvents || {
   var _perfHookTimer = null;
   var _hookPingTries = 0;
 
+  // [FIX FPS v0.2.8] Hz reales del monitor (default 60).
+  var _monitorHz = 60;
+  function initMonitorHz(){
+    try {
+      if (window.electronAPI && typeof window.electronAPI.getDisplayHz === 'function') {
+        window.electronAPI.getDisplayHz().then(function(hz){
+          _monitorHz = (hz && hz > 0) ? hz : 60;
+          try { applySettings(); } catch(e){}
+        }).catch(function(){});
+      }
+    } catch(e){}
+  }
+
+  // [FIX FPS v0.2.8] Auto-calidad.
+  var _autoQualityStart = null;
+  var _autoQualityDone = false;
+  function maybeAutoDowngrade(now){
+    if (_autoQualityDone) return;
+    if (gameSettings.autoQuality === false) { _autoQualityDone = true; return; }
+    if (_autoQualityStart === null) { _autoQualityStart = now; return; }
+    if (now - _autoQualityStart < 4000) return;
+    _autoQualityDone = true;
+    var floor = Math.max(24, Math.round(_monitorHz * 0.45));
+    if (_perfFps > 0 && _perfFps < floor) {
+      gameSettings.quality = Math.min(gameSettings.quality, 60);
+      gameSettings.autoDowngraded = true;
+      try {
+        if (window.electronAPI && window.electronAPI.configSet) {
+          window.electronAPI.configSet('gameSettings', gameSettings);
+        }
+      } catch(e){}
+      try { applySettings(); } catch(e){}
+      try { syncUI(); } catch(e){}
+    }
+  }
+// FIX: updatePerfDisplay se llamaba en setupPerfOverlay() (línea 1419),
+// en el loop() (línea 1383), en hookPing/wrapped (línea 1401) y en
+// applySettings() (línea 1980), pero la función nunca se definió.
+// Resultado: Uncaught ReferenceError en cada frame del loop de perf
+// y cada vez que cambiaba el ping. El overlay nunca se actualizaba.
+// Acá: lee _perfFps/_perfPing, pinta los spans y aplica las clases
+// pf-good/pf-warn/pf-bad según umbrales. Respeta bc_perf_overlay del
+// localStorage (1 = visible, 0 = oculto).
+function updatePerfDisplay() {
+  const overlay = document.getElementById('bc-perf-overlay');
+  if (!overlay) return;
+
+  // Visibilidad: el flag se togglea desde el settings panel
+  // (togglePerfOverlay en el launcher, y el checkbox acá adentro).
+  let show = false;
+  try { show = localStorage.getItem('bc_perf_overlay') === '1'; } catch (e) {}
+  overlay.style.display = show ? '' : 'none';
+  if (!show) return;
+
+  // --- FPS ---
+  const fpsWrap = document.getElementById('bc-perf-fps-wrap');
+  const fpsVal  = document.getElementById('bc-perf-fps');
+  if (fpsVal) {
+    fpsVal.textContent = _perfFps > 0 ? String(_perfFps) : '–';
+  }
+  if (fpsWrap) {
+    fpsWrap.classList.remove('pf-good', 'pf-warn', 'pf-bad');
+    if (_perfFps > 0) {
+      if (_perfFps >= 55)      fpsWrap.classList.add('pf-good');
+      else if (_perfFps >= 30) fpsWrap.classList.add('pf-warn');
+      else                     fpsWrap.classList.add('pf-bad');
+    }
+  }
+
+  // --- Ping ---
+  const pingWrap = document.getElementById('bc-perf-ping-wrap');
+  const pingVal  = document.getElementById('bc-perf-ping');
+  if (pingVal) {
+    pingVal.textContent = _perfPing > 0 ? String(_perfPing) : '–';
+  }
+  if (pingWrap) {
+    pingWrap.classList.remove('pf-good', 'pf-warn', 'pf-bad');
+    if (_perfPing > 0) {
+      if (_perfPing < 60)       pingWrap.classList.add('pf-good');
+      else if (_perfPing < 120) pingWrap.classList.add('pf-warn');
+      else                      pingWrap.classList.add('pf-bad');
+    }
+  }
+}
   function setupPerfOverlay(){
     var el = document.getElementById('bc-perf-overlay');
     if(!el) return;
 
     function loop(){
-      _perfFrames++;
+      var r = window.__bcRenderer;
+      if (r && typeof r.__bcRealFrameCount === 'number') {
+        _perfFrames += r.__bcRealFrameCount;
+        r.__bcRealFrameCount = 0;
+      } else {
+        _perfFrames++;
+      }
       var now = performance.now();
       if(now - _perfLast >= 500){
         _perfFps = Math.round(_perfFrames * 1000 / (now - _perfLast));
         _perfFrames = 0;
         _perfLast = now;
         updatePerfDisplay();
+        maybeAutoDowngrade(now);
       }
       _perfLoopRaf = requestAnimationFrame(loop);
     }
@@ -1346,7 +1440,6 @@ window.BCGameEvents = window.BCGameEvents || {
       if(!room){ _perfHookTimer = setTimeout(hookPing, 300); return; }
       var orig = room.onPingChange;
       if(typeof orig === 'function'){
-        // FIX #4: si ya estaba wrapped (por nosotros o por el renderer), no reintentar
         if(orig.__bcPerfHooked){
           _perfHooked = true;
           return;
@@ -1360,7 +1453,6 @@ window.BCGameEvents = window.BCGameEvents || {
         room.onPingChange = wrapped;
         _perfHooked = true;
       } else {
-        // FIX #4: retry acotado (20 × 300ms = 6s) en vez de infinito
         if(_hookPingTries < 20){
           _hookPingTries++;
           _perfHookTimer = setTimeout(hookPing, 300);
@@ -1373,39 +1465,7 @@ window.BCGameEvents = window.BCGameEvents || {
     _perfLoopRaf = requestAnimationFrame(loop);
     hookPing();
     updatePerfDisplay();
-  }
-
-  function updatePerfDisplay(){
-    var el = document.getElementById('bc-perf-overlay');
-    if(!el) return;
-
-    var show = false;
-    try { show = localStorage.getItem('bc_perf_overlay') === '1'; } catch(e){}
-    el.style.display = show ? 'flex' : 'none';
-    if(!show) return;
-
-    var fpsEl = document.getElementById('bc-perf-fps');
-    var pingEl = document.getElementById('bc-perf-ping');
-    var fpsW = document.getElementById('bc-perf-fps-wrap');
-    var pingW = document.getElementById('bc-perf-ping-wrap');
-
-    if(fpsEl) fpsEl.textContent = _perfFps || '–';
-    if(pingEl) pingEl.textContent = _perfPing || '–';
-
-    if(fpsW){
-      fpsW.classList.remove('pf-good', 'pf-warn', 'pf-bad');
-      if(_perfFps >= 120) fpsW.classList.add('pf-good');
-      else if(_perfFps >= 60) fpsW.classList.add('pf-warn');
-      else if(_perfFps > 0) fpsW.classList.add('pf-bad');
-    }
-    if(pingW){
-      pingW.classList.remove('pf-good', 'pf-warn', 'pf-bad');
-      if(_perfPing > 0){
-        if(_perfPing <= 60) pingW.classList.add('pf-good');
-        else if(_perfPing <= 120) pingW.classList.add('pf-warn');
-        else pingW.classList.add('pf-bad');
-      }
-    }
+    initMonitorHz();
   }
 
   // ============================================================
@@ -1423,8 +1483,16 @@ window.BCGameEvents = window.BCGameEvents || {
       }
     }
     if (window.__bcRenderer) {
-      if (!window.__bcRenderer.targetFPS) window.__bcRenderer.targetFPS = 0; // FULL FPS: sin límite artificial
+      // [FIX FPS v0.2.8] targetFPS = Hz reales del monitor por default.
+      var fpsCap = gameSettings.fpsLimit || _monitorHz || 60;
+      window.__bcRenderer.targetFPS = fpsCap;
       window.__bcRenderer.resolutionScale = gameSettings.quality / 100;
+      // FIX #11: la línea `window.__bcRenderer.antialias = quality > 60`
+      // que había acá era un no-op — antialias en PIXI se fija al init
+      // del renderer y no se puede togglear en runtime. El AA efectivo
+      // se decide una sola vez en createRenderer() de renderer.js,
+      // usando `thisRenderer.antialias` (default false). Si querés AA,
+      // activalo antes de entrar a la sala (o reiniciá la partida).
       window.__bcRenderer.showFPS = false;
       window.__bcRenderer.showNetGraph = false;
     }
@@ -1495,9 +1563,6 @@ window.BCGameEvents = window.BCGameEvents || {
   });
 
   syncUI();
-  // applySettings() se llama desde onOpen() cuando el renderer existe.
-  // No programamos un timeout ciego — si el join tarda más que el
-  // timeout, la config nunca se aplicaba.
 
   if ($setVolume) {
     $setVolume.addEventListener('input', function () {
@@ -1723,10 +1788,6 @@ window.BCGameEvents = window.BCGameEvents || {
   }
 
   var E = API;
-  // Exponemos el enum GamePlayState para que stats-reporter.js
-  // (que corre en otro scope) pueda saber si el partido está en
-  // curso al entrar a mitad de partido. Valores confirmados:
-  // { BeforeKickOff: 0, Playing: 1, AfterGoal: 2, Ending: 3 }
   window.__bcGamePlayState = API.GamePlayState;
 
   if (!E || !E.Room || !E.Utils) {
@@ -1745,7 +1806,6 @@ window.BCGameEvents = window.BCGameEvents || {
   var saved = loadAuth();
 
   if (saved && saved.key) {
-    // FIX #9: guard por si authFromKey no es función en versiones viejas
     var authFromKeyFn = (E.Utils && typeof E.Utils.authFromKey === 'function')
       ? E.Utils.authFromKey.bind(E.Utils)
       : null;
@@ -1791,8 +1851,6 @@ window.BCGameEvents = window.BCGameEvents || {
       var wasKickedOrBanned = (byId != null) || isBanned;
 
       if (isMe && wasKickedOrBanned) {
-        // FIX KICK/BAN: guardamos la razon real (la que escribio el admin)
-        // para que onClose la pueda mostrar en vez del mensaje generico.
         window.__bcLastKickInfo = {
           isBanned: !!isBanned,
           reason: (typeof reason === 'string' && reason) ? reason : null,
@@ -1831,7 +1889,7 @@ window.BCGameEvents = window.BCGameEvents || {
       pushChat(name, msg, team, null, verified);
       Sound.play('chat');
     },
-     onTeamGoal: function (team) {
+    onTeamGoal: function (team) {
       var name = team === 1 ? 'rojo' : team === 2 ? 'azul' : '?';
       pushChat(null, 'Gol del equipo ' + name + '!', null, 'warn');
       try { updateScoreboard(currentRoom); } catch (e) {}
@@ -1932,25 +1990,20 @@ window.BCGameEvents = window.BCGameEvents || {
             canvas: canvas,
             paintGame: true,
             images: { grass: imgs[0], concrete: imgs[1], concrete2: imgs[2], typing: imgs[3] },
-            onRequestAnimationFrame: function () {}
+            onRequestAnimationFrame: function () {
+              if (rendererObj) {
+                rendererObj.__bcRealFrameCount = (rendererObj.__bcRealFrameCount || 0) + 1;
+              }
+            }
           });
         } catch (e) {
           setError('Error renderer', e.message);
           return;
         }
 
-        rendererObj.targetFPS = 0; // FULL FPS: sin límite artificial
+        rendererObj.targetFPS = 60;
         rendererObj.resolutionScale = 1.0;
-        // [FIX FPS/CALIDAD] En Intel iGPUs viejas (i3 tipo PC de gobierno)
-        // WebGPU suele terminar corriendo por una capa de traducción (o
-        // directamente cae a software) y anda peor y más inestable que
-        // WebGL, que tiene drivers mucho más maduros ahí. Lo forzamos off.
         rendererObj.webGPU = false;
-        // [FIX LINEAS] antialias=false + generalLineWidth/discLineWidth=1
-        // es lo que hacía que las líneas se vean "raras"/dentadas, sobre
-        // todo con resolutionScale bajo. forceFXAA es antialiasing barato
-        // (no MSAA), casi no pega en el fps, y grosor 2/3 ya se ve prolijo
-        // sin volver a los 3/4 originales que consumían más fill-rate.
         rendererObj.antialias = true;
         rendererObj.showFPS = false;
         rendererObj.showInputLag = false;
@@ -1968,10 +2021,6 @@ window.BCGameEvents = window.BCGameEvents || {
         rendererObj.followPlayerId = r.currentPlayerId;
         rendererObj.followMode = true;
         rendererObj.restrictCameraOrigin = true;
-        // FIX #2: NO setear zoom inicial acá — applySettings() lo va a
-        // pisar con gameSettings.zoom/100. El default ahora es 260 (=2.6x)
-        // para preservar el zoom que antes se seteaba acá.
-        // rendererObj.setZoom(canvas.width / 2, canvas.height / 2, 2.6);
 
         r.setRenderer(rendererObj);
         window.__bcRenderer = rendererObj;
@@ -1985,7 +2034,7 @@ window.BCGameEvents = window.BCGameEvents || {
 
         pushChat(null, 'Conectado a ' + (r.name || 'la sala'), null, 'system');
 
-        // 👇 avisar al launcher que estamos adentro
+        // avisar al launcher que estamos adentro
         try {
           if (window.bcIPC && window.bcIPC.notifyHost) {
             window.bcIPC.notifyHost('bc-ready', {
@@ -2000,14 +2049,11 @@ window.BCGameEvents = window.BCGameEvents || {
         setTimeout(applyClientState, 1000);
         setTimeout(applyClientState, 3000);
 
-        // Scoreboard: refresca cada 250ms. Suficiente resolución para
-        // que el cronómetro cambie de segundo sin parpadear y para
-        // capturar goles casi instantáneos.
+        // Scoreboard: refresca cada 250ms.
         setInterval(function () {
           if (currentRoom) updateScoreboard(currentRoom);
         }, 250);
 
-        // FIX #5: cleanup del interval por múltiples vías
         var _stateCheckInterval = setInterval(function () {
           if (window.__bcDisconnected || !currentRoom || !window.__bcRenderer) {
             clearInterval(_stateCheckInterval);
@@ -2021,11 +2067,6 @@ window.BCGameEvents = window.BCGameEvents || {
         Sound.preload();
 
         setupPerfOverlay();
-
-        // FIX #3/#7: no tocar r.E (objeto compartido del API) ni volver
-        // a escribir r.config — ya fue seteado arriba desde joinConfig.
-        // Antes esto pisaba handlers entre Room instances y corrompía
-        // el API global.
 
         var $chatWrapEl = document.getElementById('bc-chat-wrap');
 
@@ -2055,10 +2096,6 @@ window.BCGameEvents = window.BCGameEvents || {
 
         $chat.addEventListener('click', function () { openChatInput(); });
 
-        // Comandos LOCALES del cliente. Se manejan acá y nunca se
-        // mandan al servidor (a diferencia de /extrapolation en el
-        // haxball original, que el server no necesita ver: es 100%
-        // client-side, ajusta cuánto "adivina" tu propio renderer).
         function tryLocalCommand(raw) {
           var m = /^\/extrapolation(?:\s+(-?\d+))?\s*$/i.exec(raw);
           if (!m) return false;
@@ -2086,7 +2123,6 @@ window.BCGameEvents = window.BCGameEvents || {
           return true;
         }
 
-        // Restaurar el valor guardado la última vez, apenas el renderer exista.
         (function restoreExtrapolation() {
           var saved = null;
           try { saved = localStorage.getItem('bc_extrapolation_ms'); } catch (e) {}
@@ -2116,26 +2152,10 @@ window.BCGameEvents = window.BCGameEvents || {
       onClose: function (reason) {
         window.__bcDisconnected = true;
 
-        // FIX #5: cortar el interval acá también
         try { if (window.__bcStateInterval) { clearInterval(window.__bcStateInterval); window.__bcStateInterval = null; } } catch(e){}
 
-        // [FIX KICK/PASSWORD] Antes esto leía reason.a1/reason.a2 a mano,
-        // que son nombres de propiedad minificados de UNA build puntual de
-        // node-haxball. Como el <script> carga @latest, cualquier update de
-        // la librería puede cambiar esos nombres y "code" queda undefined
-        // para SIEMPRE — que es exactamente lo que hacía que nunca se
-        // detecte ni el kick ni la sala con contraseña (siempre caía al
-        // mensaje genérico "La sala se cerro" sin ofrecer reintentar).
-        // Ahora sacamos el código de los ErrorCodes reales que expone la
-        // propia API (E.Errors.ErrorCodes), probamos varios nombres de
-        // propiedad conocidos, y si ninguno pega, hacemos fallback por
-        // texto (reason.toString() / el mensaje ya viene en inglés desde
-        // Errors.Language). Así no depende de una sola forma del objeto.
         var EC = (E && E.Errors && E.Errors.ErrorCodes) || {};
 
-        // [DEBUG] si el problema de contrasena persiste, este log dice
-        // exactamente que forma tiene "reason" y que code detecta -
-        // mandamelo y lo afino con el dato real en vez de adivinar.
         try { console.debug('[bc] onClose reason=', reason, 'typeof=', typeof reason); } catch(e){}
 
         var code = null;
@@ -2150,7 +2170,6 @@ window.BCGameEvents = window.BCGameEvents || {
         try { rawText = String((reason && reason.toString) ? reason.toString() : (reason || '')); } catch (e) {}
         var text = rawText.toLowerCase();
 
-        // 👇 avisar al launcher que salimos
         try {
           if (window.bcIPC && window.bcIPC.notifyHost) {
             window.bcIPC.notifyHost('bc-exit', { code: code, msg: rawText || null });
@@ -2164,13 +2183,9 @@ window.BCGameEvents = window.BCGameEvents || {
         msgs[EC.WrongPassword     != null ? EC.WrongPassword     : 5]  = 'Contrasena incorrecta.';
         msgs[EC.BannedBefore      != null ? EC.BannedBefore      : 6]  = 'Estas baneado de esa sala.';
         msgs[EC.FailedHost        != null ? EC.FailedHost        : 8]  = 'No se pudo conectar al host. La sala puede estar cerrada.';
-        // "Kicked" no está confirmado en todas las versiones de ErrorCodes;
-        // el nombre real en la libreria vendorizada es KickedNow.
         var KICKED_CODE = (EC.KickedNow != null) ? EC.KickedNow : 12;
         msgs[KICKED_CODE] = 'Te expulsaron de la sala.';
 
-        // [FIX] Si onPlayerLeave ya nos dio el motivo real (lo que escribio
-        // el admin), lo priorizamos por sobre el mensaje generico de arriba.
         var kickInfo = window.__bcLastKickInfo || null;
 
         var isWrongPassword = code === (EC.WrongPassword != null ? EC.WrongPassword : 5)
@@ -2187,8 +2202,6 @@ window.BCGameEvents = window.BCGameEvents || {
           : 'La sala se cerro' + (rawText ? ': ' + rawText : '');
         if (code != null) msg += ' (codigo ' + code + ')';
 
-        // [FIX] Si tenemos el motivo real de onPlayerLeave, lo mostramos
-        // en vez del texto generico "Te expulsaron"/"Estas baneado".
         if (kickInfo && (isKicked || isBanned || kickInfo.isBanned)) {
           var verb = kickInfo.isBanned ? 'Te banearon de la sala' : 'Te expulsaron de la sala';
           msg = verb + (kickInfo.byName ? ' (' + kickInfo.byName + ')' : '') +

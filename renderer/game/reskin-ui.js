@@ -81,6 +81,10 @@
   function renderTab(tab) {
     const body = $('reskin-body');
     if (!body) return;
+    if (!window.BCReskin) {
+      body.innerHTML = '<div class="reskin-hint">La personalización no está disponible todavía. Probá de nuevo en unos segundos.</div>';
+      return;
+    }
     if (tab === 'ball')    body.innerHTML = renderBall();
     if (tab === 'trail')   body.innerHTML = renderTrail();
     if (tab === 'bg')      body.innerHTML = renderBg();
@@ -400,6 +404,15 @@
   });
 
   function open(tab) {
+    // FIX: guard por si BCReskin no está inicializado (por ej. si este
+    // archivo se carga en un contexto donde customizer.js no arrancó,
+    // o si el launcher intenta abrirlo sin game view activo). Sin
+    // esto, renderBall/renderTrail/etc explotaban con
+    // "Cannot read properties of undefined (reading 'getSection')".
+    if (!window.BCReskin) {
+      console.warn('[reskin-ui] BCReskin no está inicializado; no se puede abrir el modal');
+      return;
+    }
     buildModal();
     modalEl.classList.add('on');
     activateTab(tab || getLastTab());
